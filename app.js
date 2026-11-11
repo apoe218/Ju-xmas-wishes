@@ -1055,8 +1055,10 @@ function showToast(message, { actionLabel = "", onAction = null, duration = 3500
   els.toast.hidden = false;
   announce(actionLabel ? `${message}. ${actionLabel} is available.` : message);
 
+  const persistent = !Number.isFinite(duration); // e.g. "Update available" waits for a tap
+  setHidden(els.toastBar, persistent);
   if (prefersReducedMotion()) {
-    toastTimer = setTimeout(hideToast, duration);
+    if (!persistent) toastTimer = setTimeout(hideToast, duration);
     return;
   }
   if (wasHidden) {
@@ -1065,6 +1067,7 @@ function showToast(message, { actionLabel = "", onAction = null, duration = 3500
       easing: SPRING,
     });
   }
+  if (persistent) return;
   toastClock = els.toastBar.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], {
     duration,
     easing: "linear",
@@ -1315,18 +1318,34 @@ async function confirmReset() {
 // Backup: export + import
 // ==========================================================================
 
-function exportBackup() {
+/** Download a dated JSON backup (share sheet → Save to Files in the home-screen app). */
+async function exportBackup() {
   const data = {
     app: "juliana-wishlist",
     version: 1,
     exportedAt: new Date().toISOString(),
     items: state.items,
   };
+  const name = `juliana-wishlist-${localDateStamp()}.json`;
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+
+  // Installed on iPhone, <a download> just opens a preview; the share sheet can save the file.
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const file = typeof File === "function" ? new File([blob], name, { type: "application/json" }) : null;
+  if (standalone && file && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "Wishlist backup" });
+      showToast(`Backup shared · ${plural(state.items.length, "gift", "gifts")}`);
+    } catch (err) {
+      if (err?.name !== "AbortError") showToast("Couldn't share the backup. Try again from Safari.", { duration: 6000 });
+    }
+    return;
+  }
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `juliana-wishlist-${localDateStamp()}.json`;
+  a.download = name;
   document.body.append(a);
   a.click();
   a.remove();
@@ -1996,6 +2015,54 @@ function bindEvents() {
 // Init
 // ==========================================================================
 
+// ==========================================================================
+// Service worker: offline app shell + "Update available · Refresh"
+// ==========================================================================
+
+/** Register ./sw.js (relative, so it works from the Pages subpath) and offer updates. */
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+  let reloading = false;
+  let userAsked = false;
+
+  const offer = (worker) =>
+    showToast("Update available", {
+      actionLabel: "Refresh",
+      duration: Infinity,
+      onAction: () => {
+        userAsked = true;
+        worker.postMessage({ type: "SKIP_WAITING" });
+      },
+    });
+
+  // Reload once the new worker takes over, but only if the person asked for it
+  // (the very first install also fires controllerchange via clients.claim()).
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!userAsked || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("./sw.js");
+      if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+      reg.addEventListener("updatefound", () => {
+        const worker = reg.installing;
+        worker?.addEventListener("statechange", () => {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) offer(worker);
+        });
+      });
+      // Check for a new version whenever the app comes back to the foreground.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") reg.update().catch(() => {});
+      });
+    } catch {
+      /* offline support is a nice-to-have; the app works without it */
+    }
+  });
+}
+
 let motionReady = false; // false during the first render: no tweens/FLIP on page load
 
 buildStats();
@@ -2008,6 +2075,7 @@ playEntrance();
 motionReady = true;
 
 if (!store.available) showStorageBanner();
+registerServiceWorker();
 
 // ==========================================================================
 // Motion: page entrance, wrapped moment, confetti
@@ -2098,24 +2166,49 @@ function confetti({ x = 0, y = 0, count = 40, shower = false } = {}) {
   }
 }
 
-/** Match the confetti canvas to the viewport (DPR ≤ 2). */
+/** Match the confetti canvas to the viewport. DPR capped at 1.5: tiny moving specks
+    don't need retina resolution, and it halves the pixels to clear and composite. */
 function sizeConfetti() {
-  const { canvas, ctx } = confettiLayer;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(window.innerWidth * dpr);
-  canvas.height = Math.round(window.innerHeight * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const layer = confettiLayer;
+  layer.dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  layer.canvas.width = Math.round(window.innerWidth * layer.dpr);
+  layer.canvas.height = Math.round(window.innerHeight * layer.dpr);
+  layer.dirty = null;
 }
 
-/** One confetti frame: physics, drawing, and cleanup when done. */
+// Unit shapes (size 1), scaled per particle with setTransform. The star is ✦.
+const STAR_PATH = (() => {
+  const path = new Path2D();
+  for (let k = 0; k < 8; k++) {
+    const r = k % 2 === 0 ? 0.75 : 0.2;
+    const a = (k * Math.PI) / 4;
+    path.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  path.closePath();
+  return path;
+})();
+const CIRCLE_PATH = (() => {
+  const path = new Path2D();
+  path.arc(0, 0, 1 / 2.4, 0, Math.PI * 2);
+  return path;
+})();
+
+/** One confetti frame: physics, then draw. Only the area the particles covered
+    last frame is cleared, and each particle is a single setTransform + fill. */
 function tickConfetti(now) {
   const layer = confettiLayer;
   const dt = Math.min(32, now - layer.last);
   layer.last = now;
-  const { ctx, particles } = layer;
-  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  const { ctx, particles, dpr } = layer;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (layer.dirty) {
+    const d = layer.dirty;
+    ctx.clearRect(d.x0 * dpr, d.y0 * dpr, (d.x1 - d.x0) * dpr, (d.y1 - d.y0) * dpr);
+  }
 
   const GRAVITY = 0.0011; // px/ms²
+  const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.age += dt;
@@ -2133,38 +2226,29 @@ function tickConfetti(now) {
 
     const life = p.age / p.ttl;
     ctx.globalAlpha = life < 0.7 ? 1 : 1 - (life - 0.7) / 0.3;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rot);
+    const k = p.size * dpr;
+    const cos = Math.cos(p.rot) * k;
+    const sin = Math.sin(p.rot) * k;
+    ctx.setTransform(cos, sin, -sin, cos, p.x * dpr, p.y * dpr);
     ctx.fillStyle = p.color;
-    const s = p.size;
-    if (p.shape === "circle") {
-      ctx.beginPath();
-      ctx.arc(0, 0, s / 2.4, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (p.shape === "square") {
-      ctx.fillRect(-s / 2, -s / 3, s, (s * 2) / 3);
-    } else {
-      // ✦ four-point star
-      ctx.beginPath();
-      for (let k = 0; k < 8; k++) {
-        const r = k % 2 === 0 ? s * 0.75 : s * 0.2;
-        const a = (k * Math.PI) / 4;
-        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-      }
-      ctx.closePath();
-      ctx.fill();
-    }
+    if (p.shape === "circle") ctx.fill(CIRCLE_PATH);
+    else if (p.shape === "star") ctx.fill(STAR_PATH);
+    else ctx.fillRect(-0.5, -1 / 3, 1, 2 / 3);
     if (p.color === "#FFFFFF") {
       // White pieces need an edge to read on the cream background.
       ctx.strokeStyle = "rgba(191, 195, 199, .9)";
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-      if (p.shape === "square") ctx.strokeRect(-s / 2, -s / 3, s, (s * 2) / 3);
+      ctx.lineWidth = 0.8 / p.size;
+      if (p.shape === "square") ctx.strokeRect(-0.5, -1 / 3, 1, 2 / 3);
+      else ctx.stroke(p.shape === "star" ? STAR_PATH : CIRCLE_PATH);
     }
-    ctx.restore();
+    const r = p.size;
+    box.x0 = Math.min(box.x0, p.x - r);
+    box.y0 = Math.min(box.y0, p.y - r);
+    box.x1 = Math.max(box.x1, p.x + r);
+    box.y1 = Math.max(box.y1, p.y + r);
   }
   ctx.globalAlpha = 1;
+  layer.dirty = particles.length ? { x0: box.x0 - 2, y0: box.y0 - 2, x1: box.x1 + 2, y1: box.y1 + 2 } : null;
 
   if (particles.length) {
     layer.raf = requestAnimationFrame(tickConfetti);

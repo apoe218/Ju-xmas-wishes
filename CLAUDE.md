@@ -6,8 +6,13 @@ where to buy it, and its status (Wishlist → Considering → Ordered → Wrappe
 with a dashboard of budget vs. spent.
 
 ## Tech rules
-- Vanilla HTML/CSS/JS only. Files: index.html, style.css, app.js, data.js.
+- Vanilla HTML/CSS/JS only. Files: index.html, style.css, app.js, data.js,
+  plus (Step 6) manifest.webmanifest, sw.js, icons/ and .nojekyll.
   No frameworks, no bundler, no npm, no build step.
+- **Bump `CACHE_VERSION` in sw.js on every deploy** ("wishlist-v1" → "-v2"…).
+  Otherwise installed copies keep serving the old cached files. After a bump,
+  open copies show "Update available · Refresh". If you add a new app file,
+  add it to PRECACHE in sw.js too.
 - All app files live at the repo root (GitHub Pages serves from the root of the
   branch; there is no /docs folder).
 - ALL asset paths must be relative (./style.css, not /style.css) because
@@ -409,3 +414,118 @@ with a dashboard of budget vs. spent.
      it; show "saved so far" across the whole list.
   5. Gift-giving mode: a hidden-from-Juliana share link / PIN lock, plus a
      print-friendly checklist for wrapping night.
+
+### Step 6: PWA and deploy
+- Built:
+  - manifest.webmanifest (name, short_name "Wishlist", start_url/scope "./",
+    standalone, cream background/theme, icons 192 / 512 / 512 maskable).
+  - icons/: icon.svg + icon-maskable.svg (gift box with bow in blush and
+    silver on cream, tiny ✦) → icon-180 (apple-touch-icon), 192, 512 and
+    maskable-512 PNGs.
+  - iOS meta: apple-touch-icon, apple-mobile-web-app-capable,
+    status-bar-style "default", title "Wishlist", theme-color.
+  - sw.js and registration; an "Update available · Refresh" toast; .nojekyll.
+- Decisions:
+  - Icons: ImageMagick here has no SVG reader (no librsvg/rsvg-convert), so
+    the PNGs were rendered with the pre-installed headless Chromium (exact
+    browser rendering) and verified with ImageMagick. To regenerate after
+    editing the SVGs, render each at its size in any browser, or use
+    rsvg-convert if installed (e.g. `rsvg-convert -w 192 icon.svg >
+    icon-192.png`). The maskable art is scaled to 86% so it stays inside the
+    80% safe circle (checked by masking it to a circle).
+  - Service worker:
+    - Cache-first for the precached app shell. Navigations (any query
+      string) serve the cached index.html.
+    - Stale-while-revalidate for fonts.googleapis.com / fonts.gstatic.com
+      (opaque responses allowed) in a separate "wishlist-fonts-v1" cache.
+    - Other requests (shop images etc.) go straight to the network.
+    - Precaching uses cache:"reload" so GitHub Pages' 10-minute HTTP cache
+      can't put stale files into a new version.
+    - activate deletes every cache except the current app + font caches,
+      then clients.claim().
+  - Updates:
+    - No automatic skipWaiting. The page shows a persistent "Update
+      available · Refresh" toast when a new worker is waiting; Refresh posts
+      SKIP_WAITING and reloads on controllerchange (only when asked, so the
+      very first install never reloads the page).
+    - The app checks for updates whenever it returns to the foreground.
+  - Registered with "./sw.js" only in secure contexts (https or localhost),
+    so its scope is the Pages subpath.
+  - Export in the installed iPhone app uses the share sheet
+    (navigator.share with a File → "Save to Files"), because <a download>
+    only previews in standalone mode. Elsewhere it's a normal download.
+  - .nojekyll makes GitHub Pages serve files as-is (no Jekyll processing,
+    so this CLAUDE.md isn't turned into a page).
+  - Safe areas: status-bar-style "default" means the standalone web view
+    starts below the status bar. Everything that touches an edge also uses
+    env(safe-area-inset-*): page padding, sticky filter bar, + button,
+    toast, sheet footer and drag handle, skip link. Checked with simulated
+    iPhone 14 Pro insets (59px top / 34px bottom); Chromium can't emulate
+    env() itself.
+  - Confetti optimised here: it now clears only the area the particles
+    covered, caps DPR at 1.5, and draws with one setTransform per particle
+    and cached Path2D shapes. The wrapped moment's p95 frame went from 16.8–
+    33ms to a steady 16.8ms at 4x CPU throttle.
+- Tested:
+  - Every suite run with the repo served from its parent folder at
+    /Ju-xmas-wishes/ (like Pages): 81 + 78 + 48 + 33 passing.
+  - New PWA suite (26 checks), passing:
+    - Relative manifest/icon links; manifest fields; PNG sizes/types.
+    - iOS meta; no root-absolute paths; Chrome reports no installability
+      errors.
+    - SW scope = subpath; app shell + fonts precached.
+    - Offline reload keeps the app, saved data and the serif font; offline
+      navigation with ?query works.
+    - A simulated deploy (bumped CACHE_VERSION + changed data.js) shows
+      "Update available · Refresh", which stays until tapped. Refresh loads
+      the new version and deletes the old cache.
+    - Safe areas: header below the notch, + button / sheet buttons above the
+      home indicator, sticky bar below the notch.
+  - Total: 266 automated checks. The test scripts live outside the repo
+    (Playwright + axe-core in the session scratchpad); they aren't part of
+    the app.
+- Live URL: https://apoe218.github.io/Ju-xmas-wishes/ once Pages serves the
+  branch this work is on (Settings → Pages → Deploy from a branch → this
+  branch, "/ (root)"; or merge into the branch Pages already uses).
+
+## Project summary (for future edits)
+- What it is: a no-build, vanilla-JS PWA at the repo root. data.js has the 14
+  seed gifts; app.js holds all state, rendering and interaction; style.css
+  is the design system; sw.js does offline support + updates. Everything
+  the user changes lives in localStorage ("juliana-wishlist-v1") on that
+  device and that browser only. Export/Import backup moves it between them.
+- Mental model of app.js, top to bottom:
+  - constants
+  - formatting
+  - storage (createStore)
+  - state + mutations (setStatus, commitPaid, deleteItem…)
+  - render() → renderHeader/Stats/Filters/Celebration/Grid, wrapped in a
+    FLIP capture/play
+  - toast and menus
+  - confirm, backup, photos
+  - item sheet
+  - events (bindEvents: delegated on #gifts)
+  - service worker
+  - init
+  - motion (entrance, wrapped moment, confetti)
+- Rules of thumb:
+  - Change state, then call save()/persist() and render(). Never write card
+    DOM directly. updateCard() patches in place with setText/setAttr/
+    setClass/setHidden (change-only writes), which keeps focus, in-flight
+    taps and transitions intact.
+  - Every animation checks prefersReducedMotion() (JS) or sits under the
+    global reduced-motion CSS override. Animate transform/opacity only;
+    keep durations within the Motion principles.
+  - Accent text and focus rings use --blush-ink (AA). --blush-deep is for
+    decoration only. Keep touch targets ≥ 44px. Spacing stays on the
+    4–64px scale.
+  - New stored fields: extend isValidItem() (or old data and imports will
+    be rejected), and think about versioning the storage key if the shape
+    changes incompatibly.
+  - New app files: relative paths only, add them to PRECACHE in sw.js, and
+    bump CACHE_VERSION.
+- Deploy checklist:
+  - Bump CACHE_VERSION in sw.js.
+  - Commit and push.
+  - Wait 1–2 minutes for Pages.
+  - Open the site: installed copies show "Update available · Refresh".
