@@ -1,7 +1,7 @@
 // Service worker for Juliana's Wishlist.
 // BUMP CACHE_VERSION ON EVERY DEPLOY so phones pick up the new files
 // (open tabs then show "Update available · Refresh").
-const CACHE_VERSION = "wishlist-v2";
+const CACHE_VERSION = "wishlist-v3";
 const FONT_CACHE = "wishlist-fonts-v1";
 
 // App shell, relative to this file so it works from the Pages subpath.

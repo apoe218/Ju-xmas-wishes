@@ -507,7 +507,7 @@ with a dashboard of budget vs. spent.
   - ⋯ → Set a budget… / Change budget…
 - Decisions:
   - Settings live in their own key, "juliana-wishlist-settings-v1": { budget,
-    present, showPrices, pin }. It uses the same createStore()
+    present, showPrices, pin… } (PIN fields changed in Step 7b). It uses the same createStore()
     (never-throwing, memory fallback) and is validated field by field.
     Items storage is unchanged.
   - Presentation is a class on <html> (.is-presenting / .hide-prices). CSS
@@ -519,10 +519,9 @@ with a dashboard of budget vs. spent.
     presenting. Verified: the page text contains no "Wrapped", "Ordered",
     "Spent", "Remaining", "Saved" or paid amounts, and axe finds no
     violations.
-  - PIN: 4 digits, stored in plain text in settings. It's a spoiler guard,
-    not security. Typing the 4th digit submits; a wrong PIN shakes and
-    stays. If the PIN is forgotten, open the site with ?exit-presentation
-    (escape hatch, never shown in the UI; it also tidies the URL).
+  - PIN: 4 digits. Typing the 4th digit submits; a wrong PIN shakes and
+    stays. (Storage, lockout and recovery were reworked in Step 7b; the
+    ?exit-presentation escape hatch described here originally was removed.)
   - The title is user-select:none and -webkit-touch-callout:none while
     presenting, and its context menu is suppressed, so the hold doesn't
     select text or trigger iOS callouts. Moving > 10px cancels the hold.
@@ -564,10 +563,55 @@ with a dashboard of budget vs. spent.
       - Survives reload.
       - Short hold ignored; 2s hold → PIN; wrong PIN stays; right PIN
         restores the tracker.
-      - Keyboard hold; Enter starts; ?exit-presentation.
+      - Keyboard hold; Enter starts.
       - iPhone touch hold with the progress line, and no text selection.
   - Earlier suites all still pass from the /Ju-xmas-wishes/ subpath (81 +
     78 + 48 + 33) plus PWA (26): 314 checks in total.
+
+### Step 7b: PIN hardening
+- Why: the Step 7 PIN was "a spoiler guard, not real security". It allowed
+  unlimited guesses, the public repo documented a URL that skipped it, and it
+  was stored in plain text.
+- Built:
+  - Only a salted SHA-256 hash is stored: pinHash + pinSalt via
+    crypto.subtle (needs https/localhost; Pages is https). Old plain "pin"
+    values are hashed on start-up (migrateLegacyPin) and still unlock.
+  - Lockout: 5 free tries (it warns at 2 left), then a 30s pause that
+    doubles with each further miss, up to 15 minutes. pinFails/pinLockUntil
+    are saved, so reloading doesn't reset them. The PIN dialog shows a live
+    countdown and disables entry.
+  - "Forgot PIN?" in the PIN dialog replaces the ?exit-presentation URL
+    (removed). It starts a one-hour wait (pinResetAt). After that, holding
+    the title leaves without the PIN. Nothing is ever lost: presentation
+    mode only hides things. Leaving clears the PIN, tries, lockout and any
+    pending reset.
+  - The PIN field is type="text" + inputmode="numeric" + -webkit-text-
+    security: disc (dots) instead of type="password", so iOS always shows
+    the number pad and never offers to save it as a password.
+  - Bug fixed (found while checking on an iPhone screen size): lifting the
+    finger after the 2s hold produced a tap on the freshly opened PIN
+    dialog's backdrop. That closed it at once, and then focus left the PIN
+    field. Now closeOnBackdrop() only closes a dialog when the press also
+    started on the backdrop (applies to every dialog), and returns focus to
+    the first field if a stray tap focused the dialog. The desktop/mouse
+    tests had missed it; an iPhone touch-hold test now covers it.
+  - sw.js CACHE_VERSION → "wishlist-v3".
+- Limits:
+  - A 4-digit PIN in a browser can't be truly secure: someone with your
+    unlocked phone, a computer and developer tools could still clear site
+    data or edit storage.
+  - The lockout uses the device clock.
+  - It is plenty for "Juliana is holding my phone".
+- Tested: Step 7 suite now 62 checks.
+  - Hash-only storage; old ?exit-presentation no longer works.
+  - Masked numeric field; "2 tries left" warning; lockout after 5 that
+    survives a reload; the pause doubles.
+  - Forgot PIN: a one-hour wait, PIN still required before it ends, leaves
+    after.
+  - Legacy plain PIN migrated and still unlocks.
+  - iPhone touch hold + PIN: the dialog stays open and focused, and
+    unlocks.
+  - All suites from the subpath: 81 + 78 + 48 + 33 + 62 + 26 (PWA) = 328.
 
 ## Project summary (for future edits)
 - What it is: a no-build, vanilla-JS PWA at the repo root. data.js has the 14
@@ -577,7 +621,8 @@ with a dashboard of budget vs. spent.
   device and that browser only. Export/Import backup moves it between them.
   The budget and presentation mode live in a second key,
   "juliana-wishlist-settings-v1" (the budget is included in backups;
-  presentation/PIN aren't).
+  presentation/PIN aren't). The PIN is stored only as a salted hash; a
+  forgotten PIN is recovered with "Forgot PIN?" (a one-hour wait).
 - Mental model of app.js, top to bottom:
   - constants
   - formatting

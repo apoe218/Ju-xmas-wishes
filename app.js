@@ -7,6 +7,8 @@ import { seedItems } from "./data.js";
 const STORAGE_KEY = "juliana-wishlist-v1";
 const SETTINGS_KEY = "juliana-wishlist-settings-v1"; // budget + presentation mode
 const HOLD_TO_EXIT_MS = 2000;
+const PIN_FREE_TRIES = 5; // wrong PINs allowed before a pause
+const PIN_RESET_DELAY_MS = 60 * 60 * 1000; // "Forgot PIN?" lets you out after an hour
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP = 10; // px of finger movement allowed before cancelling
 const UNDO_MS = 6000;
@@ -203,7 +205,9 @@ function createStore(key) {
 const store = createStore(STORAGE_KEY);
 const settingsStore = createStore(SETTINGS_KEY);
 
-const DEFAULT_SETTINGS = { budget: null, present: false, showPrices: true, pin: null };
+// PIN fields: only a salted SHA-256 hash is stored, never the PIN itself.
+const NO_PIN = { pinHash: null, pinSalt: null, pinFails: 0, pinLockUntil: 0, pinResetAt: 0 };
+let legacyPin = null; // a plain-text PIN saved by the first version; hashed on start-up
 
 /** Settings from storage, field by field, falling back to defaults for anything invalid. */
 function loadSettings() {
@@ -214,11 +218,18 @@ function loadSettings() {
     /* ignore: defaults */
   }
   const s = raw && typeof raw === "object" ? raw : {};
+  const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+  const hashOk = typeof s.pinHash === "string" && /^([0-9a-f]{64}|plain:\d{4})$/.test(s.pinHash) && typeof s.pinSalt === "string";
+  if (!hashOk && typeof s.pin === "string" && /^\d{4}$/.test(s.pin)) legacyPin = s.pin;
   return {
     budget: isMoney(s.budget) ? s.budget : null,
     present: s.present === true,
     showPrices: s.showPrices !== false,
-    pin: typeof s.pin === "string" && /^\d{4}$/.test(s.pin) ? s.pin : null,
+    pinHash: hashOk ? s.pinHash : null,
+    pinSalt: hashOk ? s.pinSalt : null,
+    pinFails: count(s.pinFails),
+    pinLockUntil: count(s.pinLockUntil),
+    pinResetAt: count(s.pinResetAt),
   };
 }
 
@@ -522,6 +533,9 @@ const els = {
   pinInput: $("#pin-input"),
   pinError: $("#pin-error"),
   pinCancel: $("#pin-cancel"),
+  pinSubmit: $("#pin-submit"),
+  pinForgot: $("#pin-forgot"),
+  pinResetNote: $("#pin-reset-note"),
   budgetDialog: $("#budget-dialog"),
   budgetInput: $("#budget-input"),
   budgetError: $("#budget-error"),
@@ -1522,11 +1536,17 @@ function validatePresentPin() {
   return !bad;
 }
 
-/** Turn presentation mode on with the dialog's choices. */
-function startPresenting() {
+/** Turn presentation mode on with the dialog's choices (the PIN is stored hashed). */
+async function startPresenting() {
+  const pin = els.presentPin.value;
+  Object.assign(settings, NO_PIN);
+  if (pin) {
+    settings.pinSalt = randomHex(16);
+    settings.pinHash = await hashPin(pin, settings.pinSalt);
+  }
+  legacyPin = null;
   settings.present = true;
   settings.showPrices = els.presentPrices.checked;
-  settings.pin = els.presentPin.value || null;
   saveSettings();
   closeMenu({ restoreFocus: false });
   hideToast();
@@ -1535,10 +1555,11 @@ function startPresenting() {
   announce("Presentation mode is on. Press and hold the title to leave.");
 }
 
-/** Back to the full tracker. */
+/** Back to the full tracker (and forget the PIN, its tries and any pending reset). */
 function stopPresenting() {
   settings.present = false;
-  settings.pin = null;
+  Object.assign(settings, NO_PIN);
+  legacyPin = null;
   saveSettings();
   render();
   announce("Presentation mode is off.");
@@ -1564,34 +1585,117 @@ function cancelHold() {
   els.heroTitle.classList.remove("is-holding");
 }
 
-/** Held long enough: leave, asking for the PIN first if one is set. */
+const hasPin = () => Boolean(settings.pinHash || legacyPin);
+const resetReady = () => settings.pinResetAt > 0 && Date.now() >= settings.pinResetAt;
+
+/** Held long enough: leave, asking for the PIN first if one is set (unless a "Forgot PIN?" wait is over). */
 function finishHold() {
   cancelHold();
-  if (!settings.pin) {
+  if (!hasPin() || resetReady()) {
     stopPresenting();
     return;
   }
   els.pinInput.value = "";
   setText(els.pinError, "");
+  refreshPinDialog();
   els.pinDialog.showModal();
+  pinTicker = setInterval(refreshPinDialog, 1000);
 }
 
-/** Check the PIN; a wrong one shakes the field and stays in presentation mode. */
-function submitPin() {
-  if (els.pinInput.value === settings.pin) {
+let pinTicker = 0;
+let pinChecking = false;
+
+/** Lockout after too many wrong PINs: 30s, then doubling, at most 15 minutes. */
+const lockoutMs = (fails) => (fails < PIN_FREE_TRIES ? 0 : Math.min(30_000 * 2 ** (fails - PIN_FREE_TRIES), 15 * 60_000));
+const isLockedOut = () => Date.now() < settings.pinLockUntil;
+
+/** Keep the PIN dialog's lockout countdown and "Forgot PIN?" note current. */
+function refreshPinDialog() {
+  const locked = isLockedOut();
+  els.pinInput.disabled = locked;
+  els.pinSubmit.disabled = locked;
+  if (locked) {
+    const secs = Math.ceil((settings.pinLockUntil - Date.now()) / 1000);
+    setText(els.pinError, `Too many tries. Try again in ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}.`);
+  } else if (els.pinError.textContent.startsWith("Too many tries")) {
+    setText(els.pinError, "");
+    els.pinInput.focus();
+  }
+  const pending = settings.pinResetAt > 0;
+  setHidden(els.pinForgot, pending);
+  setHidden(els.pinResetNote, !pending);
+  if (pending) {
+    const at = new Date(settings.pinResetAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    setText(els.pinResetNote, `PIN reset requested. Hold the title again after ${at} to leave without it.`);
+  }
+}
+
+/** "Forgot PIN?": after an hour the hold will let you out without it. Nothing is lost meanwhile. */
+function requestPinReset() {
+  settings.pinResetAt = Date.now() + PIN_RESET_DELAY_MS;
+  saveSettings();
+  refreshPinDialog();
+  els.pinResetNote.focus();
+}
+
+/** Check the PIN; a wrong one shakes the field, counts toward the lockout and stays. */
+async function submitPin() {
+  if (pinChecking || isLockedOut()) return;
+  const pin = els.pinInput.value;
+  if (!/^\d{4}$/.test(pin)) {
+    setText(els.pinError, "Enter all 4 digits.");
+    return;
+  }
+  pinChecking = true;
+  const ok = await verifyPin(pin);
+  pinChecking = false;
+  if (ok) {
     els.pinDialog.close();
     stopPresenting();
     return;
   }
-  setText(els.pinError, "That PIN doesn't match.");
+  settings.pinFails += 1;
+  settings.pinLockUntil = lockoutMs(settings.pinFails) ? Date.now() + lockoutMs(settings.pinFails) : 0;
+  saveSettings();
+  const left = PIN_FREE_TRIES - settings.pinFails;
+  setText(els.pinError, left > 0 && left <= 2 ? `That PIN doesn't match. ${plural(left, "try", "tries")} left before a short pause.` : "That PIN doesn't match.");
   els.pinInput.value = "";
-  els.pinInput.focus();
+  refreshPinDialog();
+  if (!els.pinInput.disabled) els.pinInput.focus();
   if (!prefersReducedMotion()) {
     els.pinInput.animate(
       [{ transform: "translateX(0)" }, { transform: "translateX(-8px)" }, { transform: "translateX(8px)" }, { transform: "translateX(-4px)" }, { transform: "translateX(0)" }],
       { duration: 320, easing: "ease-out" }
     );
   }
+}
+
+// ---- PIN hashing ----
+
+/** Random hex string (works without a secure context). */
+function randomHex(bytes) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Salted SHA-256 of the PIN. SubtleCrypto needs https/localhost (GitHub Pages is https). */
+async function hashPin(pin, salt) {
+  if (!crypto.subtle) return `plain:${pin}`; // only on plain-http test servers
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${pin}`));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifyPin(pin) {
+  if (settings.pinHash) return (await hashPin(pin, settings.pinSalt)) === settings.pinHash;
+  return legacyPin !== null && pin === legacyPin;
+}
+
+/** A PIN saved in plain text by the first version gets hashed on start-up. */
+async function migrateLegacyPin() {
+  if (!legacyPin || settings.pinHash) return;
+  settings.pinSalt = randomHex(16);
+  settings.pinHash = await hashPin(legacyPin, settings.pinSalt);
+  legacyPin = null;
+  saveSettings();
 }
 
 // ==========================================================================
@@ -2073,6 +2177,28 @@ function applyPhotoUrl() {
 // Events
 // ==========================================================================
 
+/**
+ * Close a modal <dialog> when its backdrop is tapped, but only if the press also
+ * started on the backdrop. Otherwise the finger lifted after the 2s title hold
+ * (which opens the PIN dialog underneath it) would close the dialog straight away.
+ */
+function closeOnBackdrop(dialog) {
+  let downOnBackdrop = false;
+  dialog.addEventListener("pointerdown", (e) => {
+    downOnBackdrop = e.target === dialog;
+  });
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog && downOnBackdrop) {
+      dialog.close("cancel");
+    } else if (document.activeElement === dialog) {
+      // The stray tap focused the dialog itself: give focus back to its first field
+      // (on iPhone this keeps the number pad up for the PIN).
+      dialog.querySelector("input:not([disabled]), button")?.focus();
+    }
+    downOnBackdrop = false;
+  });
+}
+
 function bindEvents() {
   // Close an open menu on any outside press. Pressing the menu's own anchor
   // closes it without also triggering the anchor's click.
@@ -2258,10 +2384,8 @@ function bindEvents() {
     }
   });
 
-  // ---- Confirm dialog: clicking the backdrop cancels ----
-  els.confirm.addEventListener("click", (e) => {
-    if (e.target === els.confirm) els.confirm.close("cancel");
-  });
+  // ---- Confirm dialog: tapping the backdrop cancels ----
+  closeOnBackdrop(els.confirm);
 
   // ---- Import ----
   els.importFile.addEventListener("change", () => {
@@ -2342,13 +2466,11 @@ function bindEvents() {
     if (els.pinInput.value.length === 4) submitPin();
   });
   els.pinCancel.addEventListener("click", () => els.pinDialog.close());
+  els.pinForgot.addEventListener("click", requestPinReset);
+  els.pinDialog.addEventListener("close", () => clearInterval(pinTicker));
 
-  // Clicking a dialog's backdrop (the <dialog> itself) cancels it.
-  for (const dialog of [els.presentDialog, els.budgetDialog, els.pinDialog]) {
-    dialog.addEventListener("click", (e) => {
-      if (e.target === dialog) dialog.close("cancel");
-    });
-  }
+  // Tapping a dialog's backdrop (the <dialog> itself) cancels it.
+  for (const dialog of [els.presentDialog, els.budgetDialog, els.pinDialog]) closeOnBackdrop(dialog);
 
   // Keep multiple open tabs in sync.
   window.addEventListener("storage", (e) => {
@@ -2413,14 +2535,7 @@ function registerServiceWorker() {
 
 let motionReady = false; // false during the first render: no tweens/FLIP on page load
 
-// Escape hatch if the presentation PIN is forgotten: open the site with
-// ?exit-presentation (not shown anywhere in the UI).
-if (new URLSearchParams(location.search).has("exit-presentation")) {
-  settings.present = false;
-  settings.pin = null;
-  saveSettings();
-  history.replaceState(null, "", location.pathname);
-}
+migrateLegacyPin();
 
 buildStats();
 els.ringFill = els.stats.querySelector(".ring__fill");

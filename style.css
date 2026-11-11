@@ -2009,6 +2009,12 @@ html.is-locked { overflow: hidden; }
   outline-offset: 2px;
 }
 
+/* Dots instead of digits without type="password" (see the PIN dialog markup) */
+.input--masked { -webkit-text-security: disc; text-security: disc; }
+
+.pin__forgot { justify-self: center; }
+.pin__note { text-align: center; outline: none; }
+
 .input--pin {
   font-size: 20px;
   font-weight: 600;

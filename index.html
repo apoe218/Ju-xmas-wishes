@@ -268,7 +268,7 @@
           <label class="field__label" for="present-pin">PIN to leave <span class="field__optional">optional</span></label>
           <input class="input input--pin" id="present-pin" type="text" inputmode="numeric" pattern="[0-9]*"
                  autocomplete="off" aria-describedby="present-pin-hint present-pin-error">
-          <p class="field__hint" id="present-pin-hint">4 digits. A spoiler guard, not real security.</p>
+          <p class="field__hint" id="present-pin-hint">4 digits. If you forget it, "Forgot PIN?" lets you out after an hour.</p>
           <p class="field__error" id="present-pin-error"></p>
         </div>
       </div>
@@ -286,13 +286,17 @@
       <p class="dialog__text" id="pin-text">Enter the 4-digit PIN to leave presentation mode.</p>
       <div class="dialog__fields">
         <label class="visually-hidden" for="pin-input">PIN</label>
-        <input class="input input--pin" id="pin-input" type="password" inputmode="numeric" pattern="[0-9]*"
-               autocomplete="off" aria-describedby="pin-error">
+        <!-- type="text" + CSS masking (not type="password"): iOS always shows the
+             number pad and never offers to save it as a password. -->
+        <input class="input input--pin input--masked" id="pin-input" type="text" inputmode="numeric" pattern="[0-9]*"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="pin-error">
         <p class="field__error" id="pin-error" role="alert"></p>
+        <button type="button" class="btn btn--text btn--sm pin__forgot" id="pin-forgot">Forgot PIN?</button>
+        <p class="field__hint pin__note" id="pin-reset-note" tabindex="-1" hidden></p>
       </div>
       <div class="dialog__actions">
         <button type="button" class="btn btn--ghost" id="pin-cancel">Cancel</button>
-        <button type="submit" class="btn btn--solid">Unlock</button>
+        <button type="submit" class="btn btn--solid" id="pin-submit">Unlock</button>
       </div>
     </form>
   </dialog>
