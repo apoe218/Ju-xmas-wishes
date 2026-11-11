@@ -5,6 +5,8 @@ import { seedItems } from "./data.js";
 // ==========================================================================
 
 const STORAGE_KEY = "juliana-wishlist-v1";
+const SETTINGS_KEY = "juliana-wishlist-settings-v1"; // budget + presentation mode
+const HOLD_TO_EXIT_MS = 2000;
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP = 10; // px of finger movement allowed before cancelling
 const UNDO_MS = 6000;
@@ -199,6 +201,31 @@ function createStore(key) {
 }
 
 const store = createStore(STORAGE_KEY);
+const settingsStore = createStore(SETTINGS_KEY);
+
+const DEFAULT_SETTINGS = { budget: null, present: false, showPrices: true, pin: null };
+
+/** Settings from storage, field by field, falling back to defaults for anything invalid. */
+function loadSettings() {
+  let raw = null;
+  try {
+    raw = JSON.parse(settingsStore.read() ?? "null");
+  } catch {
+    /* ignore: defaults */
+  }
+  const s = raw && typeof raw === "object" ? raw : {};
+  return {
+    budget: isMoney(s.budget) ? s.budget : null,
+    present: s.present === true,
+    showPrices: s.showPrices !== false,
+    pin: typeof s.pin === "string" && /^\d{4}$/.test(s.pin) ? s.pin : null,
+  };
+}
+
+/** Persist settings (budget, presentation mode). */
+function saveSettings() {
+  if (settingsStore.write(JSON.stringify(settings)) === "unavailable") showStorageBanner();
+}
 
 const isMoney = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
@@ -246,6 +273,8 @@ function loadItems() {
 // State
 // ==========================================================================
 
+const settings = loadSettings();
+
 const state = {
   items: loadItems(),
   filter: "All", // category name or "All"
@@ -276,14 +305,19 @@ const isPurchased = (item) => PURCHASED.has(item.status);
 const matchesCategory = (item, filter = state.filter) => filter === "All" || item.category === filter;
 const matchesStatus = (item, status = state.status) => status === "All" || item.status === status;
 
-/** Dashboard numbers: total estimate, spent (paid ?? price for ordered/wrapped), remaining, counts. */
+/** Dashboard numbers: budget (your cap, else the sum of estimates), spent
+    (paid ?? price for ordered/wrapped), remaining = budget − spent, counts. */
 function computeStats(items) {
   const purchased = items.filter(isPurchased);
-  const total = items.reduce((sum, item) => sum + item.price, 0);
+  const estimates = items.reduce((sum, item) => sum + item.price, 0);
+  const total = settings.budget ?? estimates;
   const spent = purchased.reduce((sum, item) => sum + (item.paid ?? item.price), 0);
   const wrapped = items.filter((item) => item.status === "wrapped").length;
-  return { total, spent, remaining: total - spent, bought: purchased.length, wrapped, count: items.length };
+  return { total, estimates, spent, remaining: total - spent, bought: purchased.length, wrapped, count: items.length };
 }
+
+/** Wrapped gifts live in their own section, except right after wrapping and in presentation mode. */
+const isShelved = (item) => item.status === "wrapped" && !pendingWrap.has(item.id) && !settings.present;
 
 /** Items matching both filters, in the chosen sort (ties keep list order). */
 function getVisibleItems() {
@@ -390,6 +424,51 @@ function deleteItem(id) {
   showToast("Item removed", { actionLabel: "Undo", onAction: undoDelete, duration: UNDO_MS });
 }
 
+/**
+ * Reorder within what you can see: "up"/"down" swap with the neighbouring visible
+ * card in the same section; "top"/"bottom" jump to the ends. Switches the sort
+ * to "Default order" so the move is visible.
+ */
+function moveItem(id, where) {
+  const item = findItem(id);
+  if (!item) return;
+  state.sort = "default";
+  const peers = getVisibleItems().filter((i) => isShelved(i) === isShelved(item));
+  const pos = peers.indexOf(item);
+  const target = { up: peers[pos - 1], down: peers[pos + 1], top: peers[0], bottom: peers[peers.length - 1] }[where];
+  if (!target || target === item) return;
+  state.items.splice(state.items.indexOf(item), 1);
+  const at = state.items.indexOf(target) + (where === "down" || where === "bottom" ? 1 : 0);
+  state.items.splice(at, 0, item);
+  persist();
+  render();
+  const words = { up: "up", down: "down", top: "to the top", bottom: "to the bottom" };
+  announce(`Moved ${item.name} ${words[where]}.`);
+}
+
+/** Copy a gift (as a fresh Wishlist item) right after the original, then edit the copy. */
+function duplicateItem(id) {
+  const item = findItem(id);
+  if (!item) return;
+  const index = state.items.indexOf(item);
+  const copy = { ...clone(item), id: makeId(item.name), name: `${item.name} (copy)`.slice(0, 120), status: "wishlist", paid: null };
+  state.items.splice(index + 1, 0, copy);
+  if (save() === "quota") {
+    state.items.splice(index + 1, 1);
+    showToast(QUOTA_MESSAGE, { duration: 8000 });
+    return;
+  }
+  if (!matchesCategory(copy) || !matchesStatus(copy)) {
+    state.filter = "All";
+    state.status = "All";
+  }
+  render();
+  announce(`Duplicated ${item.name}.`);
+  const card = cardEls.get(copy.id);
+  card?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" });
+  openSheet("edit", copy.id, card?.querySelector(".card__more") ?? els.addBtn);
+}
+
 /** Put the last deleted gift back at its original position. */
 function undoDelete() {
   if (!lastDeleted) return;
@@ -432,6 +511,21 @@ const els = {
   resultCount: $("#result-count"),
   sort: $("#sort"),
   hero: $(".hero"),
+  heroTitle: $("#hero-title"),
+  presentDialog: $("#present-dialog"),
+  presentPrices: $("#present-prices"),
+  presentPin: $("#present-pin"),
+  presentPinError: $("#present-pin-error"),
+  presentStart: $("#present-start"),
+  pinDialog: $("#pin-dialog"),
+  pinForm: $("#pin-form"),
+  pinInput: $("#pin-input"),
+  pinError: $("#pin-error"),
+  pinCancel: $("#pin-cancel"),
+  budgetDialog: $("#budget-dialog"),
+  budgetInput: $("#budget-input"),
+  budgetError: $("#budget-error"),
+  budgetSave: $("#budget-save"),
   celebrate: $("#celebrate"),
   gifts: $("#gifts"),
   grid: $("#grid"),
@@ -532,6 +626,7 @@ function onPhotoEvent(e) {
 /** Rebuild everything from state. Card moves between renders are FLIP-animated. */
 function render() {
   const flip = captureCardRects();
+  renderMode();
   renderHeader();
   renderStats();
   renderFilters();
@@ -542,11 +637,36 @@ function render() {
 
 /** Show the "Every gift is wrapped" banner when everything is wrapped. */
 function renderCelebration() {
-  setHidden(els.celebrate, !isAllWrapped());
+  setHidden(els.celebrate, !isAllWrapped() || settings.present);
+}
+
+/**
+ * Presentation mode: CSS hides everything that could spoil a surprise (statuses,
+ * paid prices, totals, ribbons, the Wrapped section, edit controls); here we keep
+ * state consistent with that (no status filter or status/price sort) and make the
+ * title the hold-to-leave control.
+ */
+function renderMode() {
+  const root = document.documentElement;
+  root.classList.toggle("is-presenting", settings.present);
+  root.classList.toggle("hide-prices", settings.present && !settings.showPrices);
+  if (settings.present) {
+    state.status = "All";
+    const hidden = new Set(["status", ...(settings.showPrices ? [] : ["price-asc", "price-desc"])]);
+    if (hidden.has(state.sort)) state.sort = "default";
+    for (const option of els.sort.options) option.hidden = option.disabled = hidden.has(option.value);
+    setAttr(els.heroTitle, "tabindex", "0");
+    setAttr(els.heroTitle, "aria-describedby", "hold-hint");
+  } else {
+    for (const option of els.sort.options) option.hidden = option.disabled = false;
+    els.heroTitle.removeAttribute("tabindex");
+    els.heroTitle.removeAttribute("aria-describedby");
+  }
 }
 
 /** Subtitle with the live gift count. */
 function renderHeader() {
+  setText(els.totalLabel, settings.budget == null ? "Total budget" : "Budget");
   setText(els.subtitle, `${plural(state.items.length, "gift", "gifts")} · curated from her Pinterest board`);
 }
 
@@ -555,9 +675,9 @@ function renderHeader() {
 function buildStats() {
   els.stats.innerHTML = `
     <div class="stat">
-      <p class="stat__label">Total budget</p>
+      <p class="stat__label" data-stat="total-label">Total budget</p>
       <p class="stat__value" data-stat="total"></p>
-      <p class="stat__caption">Estimated, all gifts</p>
+      <p class="stat__caption" data-stat="total-caption"></p>
     </div>
     <div class="stat">
       <p class="stat__label">Spent</p>
@@ -567,7 +687,7 @@ function buildStats() {
     <div class="stat">
       <p class="stat__label">Remaining</p>
       <p class="stat__value" data-stat="remaining"></p>
-      <p class="stat__caption">Still to buy</p>
+      <p class="stat__caption" data-stat="remaining-caption"></p>
     </div>
     <div class="stat stat--ring">
       <p class="stat__label">Wrapped</p>
@@ -610,6 +730,11 @@ function renderStats() {
     els.ringFill.setAttribute("stroke-dashoffset", (RING_C * (1 - v)).toFixed(2));
   });
   setText(el("bought"), `${s.bought} of ${s.count} bought`);
+  setText(el("total-caption"), settings.budget == null ? "Estimated, all gifts" : `Estimates ${formatMoney(s.estimates)}`);
+  setText(
+    el("remaining-caption"),
+    s.remaining < 0 ? "Over budget" : settings.budget == null ? "Still to buy" : "Left in budget"
+  );
   setText(el("pct"), `${pct}% ready to give`);
 
   const ring = els.stats.querySelector(".ring");
@@ -618,7 +743,7 @@ function renderStats() {
   setAttr(ring, "aria-valuetext", `${s.wrapped} of ${s.count} wrapped`);
 
   // Speak meaningful dashboard changes (not on first paint).
-  if (lastStats && lastStats.spent !== s.spent) announceTotals(`Spent now ${formatMoney(s.spent)}.`);
+  if (lastStats && lastStats.spent !== s.spent && !settings.present) announceTotals(`Spent now ${formatMoney(s.spent)}.`);
   lastStats = s;
 }
 
@@ -794,7 +919,7 @@ function updateCard(el, item) {
   const previousStatus = el.dataset.status;
 
   setAttr(el, "data-status", item.status);
-  el.classList.toggle("is-wrapped", item.status === "wrapped");
+  el.classList.toggle("is-wrapped", item.status === "wrapped" && !settings.present);
   const media = q(".card__media");
   setClass(media, `card__media card__media--${slug(item.category)}`);
   setText(q(".card__emoji"), EMOJI[item.category] ?? "🎁");
@@ -882,7 +1007,6 @@ function renderGrid() {
     updateCard(el, item);
     return el;
   };
-  const isShelved = (item) => item.status === "wrapped" && !pendingWrap.has(item.id);
   const active = visible.filter((item) => !isShelved(item)).map(toEl);
   const wrapped = visible.filter(isShelved).map(toEl);
 
@@ -1215,33 +1339,59 @@ function openStatusMenu(pill) {
   });
 }
 
-/** Card ⋯ menu: Edit / Delete. */
+/** Card ⋯ menu: Edit, Duplicate, Move (only the moves that make sense), Delete. */
 function openCardMenu(button) {
   const id = button.closest(".card")?.dataset.id;
   const item = findItem(id);
   if (!item) return;
+  const peers = getVisibleItems()
+    .slice()
+    .sort((a, b) => state.items.indexOf(a) - state.items.indexOf(b))
+    .filter((i) => isShelved(i) === isShelved(item));
+  const pos = peers.indexOf(item);
+  const first = pos === 0;
+  const last = pos === peers.length - 1;
+  const moves = [
+    !first && peers.length > 2 && { value: "top", label: "Move to top" },
+    !first && { value: "up", label: "Move up" },
+    !last && { value: "down", label: "Move down" },
+    !last && peers.length > 2 && { value: "bottom", label: "Move to bottom" },
+  ].filter(Boolean);
   openMenu(button, {
     label: `Actions for ${item.name}`,
     items: [
       { value: "edit", label: "Edit" },
+      { value: "duplicate", label: "Duplicate" },
+      ...(moves.length ? [{ separator: true }, ...moves] : []),
+      { separator: true },
       { value: "delete", label: "Delete", danger: true },
     ],
-    onSelect: (value) => (value === "edit" ? openSheet("edit", id, button) : deleteItem(id)),
+    onSelect: (value) => {
+      if (value === "edit") openSheet("edit", id, button);
+      else if (value === "duplicate") duplicateItem(id);
+      else if (value === "delete") deleteItem(id);
+      else moveItem(id, value);
+    },
   });
 }
 
-/** Header ⋯ menu: Export, Import, Reset. */
+/** Header ⋯ menu: Presentation mode, Budget, Export, Import, Reset. */
 function openSettingsMenu() {
   openMenu(els.settingsBtn, {
     label: "Settings",
     items: [
+      { value: "present", label: "Presentation mode…" },
+      { value: "budget", label: settings.budget == null ? "Set a budget…" : "Change budget…" },
+      { separator: true },
       { value: "export", label: "Export backup" },
       { value: "import", label: "Import backup…" },
       { separator: true },
       { value: "reset", label: "Reset to original list", danger: true },
     ],
     onSelect: (value) => {
-      if (value === "export") exportBackup();
+      if (value === "present") openPresentDialog();
+      else if (value === "budget") openBudgetDialog();
+      else if (value === "export") exportBackup();
       else if (value === "import") {
         els.importFile.value = "";
         els.importFile.click();
@@ -1315,6 +1465,136 @@ async function confirmReset() {
 }
 
 // ==========================================================================
+// Budget
+// ==========================================================================
+
+/** Ask for a budget cap (empty = use the sum of the estimates). */
+function openBudgetDialog() {
+  els.budgetInput.value = formatPaidInput(settings.budget);
+  setText(els.budgetError, "");
+  els.budgetSave.disabled = false;
+  els.budgetDialog.returnValue = "";
+  els.budgetDialog.showModal();
+}
+
+/** Live validation for the budget field. */
+function validateBudget() {
+  const value = parseMoney(els.budgetInput.value);
+  const bad = Number.isNaN(value);
+  setText(els.budgetError, bad ? "Enter an amount like 5,000, or leave it empty." : "");
+  setAttr(els.budgetInput, "aria-invalid", String(bad));
+  els.budgetSave.disabled = bad;
+  return bad ? undefined : value;
+}
+
+/** Save the budget when the dialog closes with "Save". */
+function onBudgetClosed() {
+  if (els.budgetDialog.returnValue !== "confirm") return;
+  const value = validateBudget();
+  if (value === undefined) return;
+  settings.budget = value;
+  saveSettings();
+  render();
+  announce(value == null ? "Budget cleared; using the estimates." : `Budget set to ${formatMoney(value)}.`);
+}
+
+// ==========================================================================
+// Presentation mode
+// ==========================================================================
+
+/** Ask how to present (prices on/off, optional PIN). */
+function openPresentDialog() {
+  els.presentPrices.checked = settings.showPrices;
+  els.presentPin.value = "";
+  validatePresentPin();
+  els.presentDialog.returnValue = "";
+  els.presentDialog.showModal();
+}
+
+/** The PIN is optional, but if given it must be exactly 4 digits. */
+function validatePresentPin() {
+  const digits = els.presentPin.value.replace(/\D/g, "").slice(0, 4);
+  if (digits !== els.presentPin.value) els.presentPin.value = digits;
+  const bad = digits.length > 0 && digits.length < 4;
+  setText(els.presentPinError, bad ? "Use 4 digits, or leave it empty." : "");
+  setAttr(els.presentPin, "aria-invalid", String(bad));
+  els.presentStart.disabled = bad;
+  return !bad;
+}
+
+/** Turn presentation mode on with the dialog's choices. */
+function startPresenting() {
+  settings.present = true;
+  settings.showPrices = els.presentPrices.checked;
+  settings.pin = els.presentPin.value || null;
+  saveSettings();
+  closeMenu({ restoreFocus: false });
+  hideToast();
+  render();
+  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  announce("Presentation mode is on. Press and hold the title to leave.");
+}
+
+/** Back to the full tracker. */
+function stopPresenting() {
+  settings.present = false;
+  settings.pin = null;
+  saveSettings();
+  render();
+  announce("Presentation mode is off.");
+  els.settingsBtn.focus({ preventScroll: true });
+}
+
+// ---- Hold the title to leave ----
+
+let hold = null; // { timer, x, y }
+
+/** Start the 2s hold (pointer or Enter/Space on the focused title). */
+function startHold(x = 0, y = 0) {
+  if (!settings.present || hold || els.pinDialog.open) return;
+  els.heroTitle.classList.add("is-holding");
+  hold = { x, y, timer: setTimeout(finishHold, HOLD_TO_EXIT_MS) };
+}
+
+/** Released or moved too early: nothing happens. */
+function cancelHold() {
+  if (!hold) return;
+  clearTimeout(hold.timer);
+  hold = null;
+  els.heroTitle.classList.remove("is-holding");
+}
+
+/** Held long enough: leave, asking for the PIN first if one is set. */
+function finishHold() {
+  cancelHold();
+  if (!settings.pin) {
+    stopPresenting();
+    return;
+  }
+  els.pinInput.value = "";
+  setText(els.pinError, "");
+  els.pinDialog.showModal();
+}
+
+/** Check the PIN; a wrong one shakes the field and stays in presentation mode. */
+function submitPin() {
+  if (els.pinInput.value === settings.pin) {
+    els.pinDialog.close();
+    stopPresenting();
+    return;
+  }
+  setText(els.pinError, "That PIN doesn't match.");
+  els.pinInput.value = "";
+  els.pinInput.focus();
+  if (!prefersReducedMotion()) {
+    els.pinInput.animate(
+      [{ transform: "translateX(0)" }, { transform: "translateX(-8px)" }, { transform: "translateX(8px)" }, { transform: "translateX(-4px)" }, { transform: "translateX(0)" }],
+      { duration: 320, easing: "ease-out" }
+    );
+  }
+}
+
+// ==========================================================================
 // Backup: export + import
 // ==========================================================================
 
@@ -1325,6 +1605,7 @@ async function exportBackup() {
     version: 1,
     exportedAt: new Date().toISOString(),
     items: state.items,
+    settings: { budget: settings.budget },
   };
   const name = `juliana-wishlist-${localDateStamp()}.json`;
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -1364,7 +1645,10 @@ function parseBackup(text) {
   const items = Array.isArray(data) ? data : data?.items;
   if (!isValidItems(items)) return { error: "That file doesn't look like a wishlist backup." };
   const exportedAt = typeof data?.exportedAt === "string" ? new Date(data.exportedAt) : null;
-  return { items, exportedAt: exportedAt && !Number.isNaN(exportedAt.getTime()) ? exportedAt : null };
+  const budget = data?.settings && "budget" in data.settings && (data.settings.budget === null || isMoney(data.settings.budget))
+    ? data.settings.budget
+    : undefined; // older backups have no settings: keep the current budget
+  return { items, budget, exportedAt: exportedAt && !Number.isNaN(exportedAt.getTime()) ? exportedAt : null };
 }
 
 /** Read, validate, preview and (on confirm) replace the list from a backup file. */
@@ -1397,6 +1681,10 @@ async function importBackup(file) {
     state.items = previous;
     showToast("This backup is too large for this device's storage. Try a backup with fewer uploaded photos.", { duration: 8000 });
     return;
+  }
+  if (parsed.budget !== undefined) {
+    settings.budget = parsed.budget;
+    saveSettings();
   }
   resetView();
   render();
@@ -2003,17 +2291,73 @@ function bindEvents() {
     }).observe(els.controlsSentinel);
   }
 
+  // ---- Budget dialog ----
+  els.budgetInput.addEventListener("input", validateBudget);
+  els.budgetInput.addEventListener("keydown", (e) => {
+    // method="dialog" would submit with the first button (Cancel) on Enter.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (validateBudget() !== undefined) els.budgetDialog.close("confirm");
+    }
+  });
+  els.budgetDialog.addEventListener("close", onBudgetClosed);
+
+  // ---- Presentation mode ----
+  els.presentPin.addEventListener("input", validatePresentPin);
+  els.presentPin.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (validatePresentPin()) els.presentDialog.close("confirm");
+    }
+  });
+  els.presentDialog.addEventListener("close", () => {
+    if (els.presentDialog.returnValue === "confirm" && validatePresentPin()) startPresenting();
+  });
+  els.heroTitle.addEventListener("pointerdown", (e) => {
+    if (e.button === 0) startHold(e.clientX, e.clientY);
+  });
+  els.heroTitle.addEventListener("pointermove", (e) => {
+    if (hold && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > LONG_PRESS_SLOP) cancelHold();
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) els.heroTitle.addEventListener(type, cancelHold);
+  els.heroTitle.addEventListener("contextmenu", (e) => {
+    if (settings.present) e.preventDefault(); // no iOS/desktop callout while holding
+  });
+  els.heroTitle.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && !e.repeat && settings.present) {
+      e.preventDefault();
+      startHold();
+    }
+  });
+  els.heroTitle.addEventListener("keyup", (e) => {
+    if (e.key === "Enter" || e.key === " ") cancelHold();
+  });
+  els.heroTitle.addEventListener("blur", cancelHold);
+  els.pinForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitPin();
+  });
+  els.pinInput.addEventListener("input", () => {
+    els.pinInput.value = els.pinInput.value.replace(/\D/g, "").slice(0, 4);
+    if (els.pinInput.value.length === 4) submitPin();
+  });
+  els.pinCancel.addEventListener("click", () => els.pinDialog.close());
+
+  // Clicking a dialog's backdrop (the <dialog> itself) cancels it.
+  for (const dialog of [els.presentDialog, els.budgetDialog, els.pinDialog]) {
+    dialog.addEventListener("click", (e) => {
+      if (e.target === dialog) dialog.close("cancel");
+    });
+  }
+
   // Keep multiple open tabs in sync.
   window.addEventListener("storage", (e) => {
-    if (e.key !== null && e.key !== STORAGE_KEY) return;
+    if (e.key !== null && e.key !== STORAGE_KEY && e.key !== SETTINGS_KEY) return;
     state.items = loadItems();
+    Object.assign(settings, loadSettings());
     render();
   });
 }
-
-// ==========================================================================
-// Init
-// ==========================================================================
 
 // ==========================================================================
 // Service worker: offline app shell + "Update available · Refresh"
@@ -2063,10 +2407,24 @@ function registerServiceWorker() {
   });
 }
 
+// ==========================================================================
+// Init
+// ==========================================================================
+
 let motionReady = false; // false during the first render: no tweens/FLIP on page load
+
+// Escape hatch if the presentation PIN is forgotten: open the site with
+// ?exit-presentation (not shown anywhere in the UI).
+if (new URLSearchParams(location.search).has("exit-presentation")) {
+  settings.present = false;
+  settings.pin = null;
+  saveSettings();
+  history.replaceState(null, "", location.pathname);
+}
 
 buildStats();
 els.ringFill = els.stats.querySelector(".ring__fill");
+els.totalLabel = els.stats.querySelector('[data-stat="total-label"]');
 buildFilters();
 buildSheet();
 bindEvents();

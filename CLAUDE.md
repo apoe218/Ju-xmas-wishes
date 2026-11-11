@@ -488,21 +488,107 @@ with a dashboard of budget vs. spent.
   branch this work is on (Settings → Pages → Deploy from a branch → this
   branch, "/ (root)"; or merge into the branch Pages already uses).
 
+### Step 7: presentation mode and editing options
+- Built:
+  - Presentation mode (⋯ → Presentation mode…): a spoiler-free lookbook to
+    show Juliana.
+    - Hidden: status pills, paid fields and Saved badges, the dashboard, the
+      status filter row, ribbons, the Wrapped section, the + button, the
+      card ⋯ menus, the settings button and the all-wrapped banner.
+    - Wrapped gifts return to their normal place, unmuted.
+    - Optional: hide prices (this also removes the price sorts) and a
+      4-digit PIN.
+    - Leave by pressing and holding the title for 2s (a hairline fills
+      under it), then the PIN if one is set. Keyboard: hold Enter/Space on
+      the focused title.
+    - It survives a reload/relaunch until you leave.
+  - Card ⋯ menu: Edit, Duplicate, Move to top / up / down / to bottom,
+    Delete.
+  - ⋯ → Set a budget… / Change budget…
+- Decisions:
+  - Settings live in their own key, "juliana-wishlist-settings-v1": { budget,
+    present, showPrices, pin }. It uses the same createStore()
+    (never-throwing, memory fallback) and is validated field by field.
+    Items storage is unchanged.
+  - Presentation is a class on <html> (.is-presenting / .hide-prices). CSS
+    hides every spoiler and edit control. renderMode() keeps state
+    consistent: status filter forced to All, status/price sorts disabled,
+    the title made focusable with a hidden "hold to leave" hint.
+    isShelved() is false while presenting, so wrapped cards FLIP back into
+    the main grid. Spending isn't announced to screen readers while
+    presenting. Verified: the page text contains no "Wrapped", "Ordered",
+    "Spent", "Remaining", "Saved" or paid amounts, and axe finds no
+    violations.
+  - PIN: 4 digits, stored in plain text in settings. It's a spoiler guard,
+    not security. Typing the 4th digit submits; a wrong PIN shakes and
+    stays. If the PIN is forgotten, open the site with ?exit-presentation
+    (escape hatch, never shown in the UI; it also tidies the URL).
+  - The title is user-select:none and -webkit-touch-callout:none while
+    presenting, and its context menu is suppressed, so the hold doesn't
+    select text or trigger iOS callouts. Moving > 10px cancels the hold.
+  - The price switch remembers your last choice; the PIN is asked for fresh
+    each time.
+  - Reorder moves relative to what you can see: up/down swap with the
+    neighbouring visible card in the same section (main grid vs Wrapped),
+    respecting filters; top/bottom go to the ends of that section. It
+    switches the sort to "Default order" so the move is visible, and focus
+    stays on the moved card's ⋯. The menu only offers moves that make sense
+    (no "Move up" on the first card; top/bottom only with 3+ cards).
+  - Duplicate inserts "<name> (copy)" right after the original as a fresh
+    Wishlist item (paid cleared, photo kept) and opens it in the edit sheet.
+    A quota error rolls back with the storage-full toast.
+  - Budget: computeStats() returns total = budget ?? sum of estimates, and
+    estimates separately. With a budget, the first tile reads "Budget
+    $5,000 / Estimates $16,481" and Remaining = budget − spent ("Left in
+    budget", or "Over budget" with a negative amount). Empty clears it.
+    Backups now include settings.budget. Importing applies it, and older
+    backups without settings keep the current budget. Presentation flags
+    and the PIN are never exported.
+  - The settings ⋯ button got z-index 2: the title became position:relative
+    for the hold line and was covering the bottom of the button's 44px
+    target (caught by the hit-area probe).
+  - PIN inputs have no maxlength; JS keeps the first 4 digits, so a pasted
+    "12-34" works (maxlength had truncated "12ab34" to "12ab" → "12").
+  - sw.js CACHE_VERSION bumped to "wishlist-v2" so installed copies offer the
+    update.
+- Tested:
+  - New suite (48 checks), all passing:
+    - Reorder: every move, menu contents at the edges, sort switch, filtered
+      moves, persistence and focus.
+    - Duplicate: placement, fields, opens the editor, edit the copy.
+    - Budget: validation, tiles, Left/Over budget, persistence, backup
+      round trip, clearing.
+    - Presentation mode:
+      - Every hidden element; prices toggle; page text has no spoilers;
+        axe clean.
+      - Survives reload.
+      - Short hold ignored; 2s hold → PIN; wrong PIN stays; right PIN
+        restores the tracker.
+      - Keyboard hold; Enter starts; ?exit-presentation.
+      - iPhone touch hold with the progress line, and no text selection.
+  - Earlier suites all still pass from the /Ju-xmas-wishes/ subpath (81 +
+    78 + 48 + 33) plus PWA (26): 314 checks in total.
+
 ## Project summary (for future edits)
 - What it is: a no-build, vanilla-JS PWA at the repo root. data.js has the 14
   seed gifts; app.js holds all state, rendering and interaction; style.css
   is the design system; sw.js does offline support + updates. Everything
   the user changes lives in localStorage ("juliana-wishlist-v1") on that
   device and that browser only. Export/Import backup moves it between them.
+  The budget and presentation mode live in a second key,
+  "juliana-wishlist-settings-v1" (the budget is included in backups;
+  presentation/PIN aren't).
 - Mental model of app.js, top to bottom:
   - constants
   - formatting
   - storage (createStore)
-  - state + mutations (setStatus, commitPaid, deleteItem…)
+  - state + settings + mutations (setStatus, commitPaid, deleteItem,
+    moveItem, duplicateItem…)
   - render() → renderHeader/Stats/Filters/Celebration/Grid, wrapped in a
     FLIP capture/play
   - toast and menus
-  - confirm, backup, photos
+  - confirm, budget, presentation mode (hold-to-leave + PIN), backup,
+    photos
   - item sheet
   - events (bindEvents: delegated on #gifts)
   - service worker
