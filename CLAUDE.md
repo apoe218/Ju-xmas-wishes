@@ -179,3 +179,80 @@ with a dashboard of budget vs. spent.
   - The chip-row edge fade still shows when the row is scrolled to its end.
   - iOS Safari long-press was tested in Chromium touch emulation, not on a
     real iPhone.
+
+### Step 3: item management, photos, backup
+- Built:
+  - Floating blush "+" button (safe-area aware) → item sheet in "add" mode.
+  - Shared add/edit sheet: a bottom sheet on phones, a centered 520px dialog
+    from 768px.
+  - Card "⋯" menu with Edit / Delete; Delete has a 6s "Item removed · Undo"
+    toast.
+  - Photos: upload (resized on a canvas) or image URL. Cards show them
+    object-fit: cover with a fade-in; broken URLs fall back to the emoji.
+  - Settings ⋯ menu: Export backup / Import backup… / Reset.
+  - Empty-list state ("A blank page" + Add a gift).
+- Decisions:
+  - Sheet = a full-screen transparent <dialog> containing its own scrim and
+    panel (not ::backdrop), so both can be animated and dragged.
+    showModal() gives native focus containment and Esc. Esc is intercepted
+    (when cancelable) so it animates out. Focus returns to the trigger (the
+    card ⋯, the FAB or the empty-state button), falling back to the FAB.
+  - Swipe to close: only the sheet header (handle + title) is draggable, with
+    touch-action:none, so scrolling the form never fights the gesture. It
+    closes past 30% of the sheet's height or on a downward flick
+    (> 0.5 px/ms); otherwise it springs back. Backdrop tap closes.
+  - Focus on open: desktop "add" focuses Name; phones focus the sheet title
+    so the keyboard doesn't jump up over the opening animation.
+  - Fields: Name (required), Category (select), Estimated price (required;
+    text + inputmode=decimal, so "$1,250" is accepted), Link (optional;
+    "rimowa.com/x" becomes "https://rimowa.com/x" on blur), Notes, Status
+    (segmented control of real radio buttons), Paid (shown only for
+    Ordered/Wrapped; its placeholder mirrors the estimate), Photo.
+  - Validation messages appear after a field is blurred; Save stays disabled
+    until valid and while an upload is processing. Enter in a single-line
+    field moves to the next field rather than submitting.
+  - New ids: slug of the name + 4 random chars (e.g. "silk-scarf-blush-k3f9").
+    New gifts go at the end of the list. If a new or edited gift wouldn't
+    match the current filters, the filters reset so it's visible.
+  - Delete: focus moves to the next card's ⋯ (else the previous card, else
+    the FAB). Undo re-inserts at the original index. One undo slot: a newer
+    delete replaces the toast.
+  - Photos: resizeImage() draws onto a white-filled canvas (flattens PNG
+    transparency), max 800px on the long edge, JPEG quality 0.8, stored as a
+    data URL. Only http(s) URLs and raster data:image URLs are rendered
+    (safeImageSrc). Image load/error events are captured at the document
+    level, so card photos need no per-card listeners.
+  - Storage quota: store.write() now returns "ok" | "quota" | "unavailable".
+    A quota error no longer marks storage unavailable. In the sheet, the edit
+    is rolled back and the sheet stays open with a message suggesting image
+    URLs. Elsewhere a toast explains it.
+  - Backup format: { app, version: 1, exportedAt, items }, pretty-printed,
+    named juliana-wishlist-YYYY-MM-DD.json (local date). Import also accepts
+    a bare items array. It validates with the same isValidItems() as
+    loading, previews the count and export date, and confirms in a shared
+    confirm dialog (reset uses it too). A quota failure rolls back. Import
+    and reset both reset filters and sort.
+  - Storage banner moved inline to the top of the page, so it can't collide
+    with the toast and FAB.
+- Tested (Playwright: 78 new checks + the 81 Step 2 checks, all passing):
+  - Validation messages and the disabled Save.
+  - Upload of a 3000×2000 JPEG → an 800×533 JPEG data URL, shown on the card
+    with alt text.
+  - Non-image upload error.
+  - Broken image URL → emoji fallback.
+  - Edit price + notes.
+  - Delete → Undo restores the exact order; without Undo the toast leaves
+    after 6s.
+  - Export filename and content are byte-identical to storage.
+  - Reset → import (bad files rejected, cancel keeps data) → everything comes
+    back identical, photos included, and survives reload.
+  - Simulated QuotaExceededError on a photo save.
+  - iPhone 13: sheet docked to the bottom; backdrop tap closes; a slow short
+    drag springs back; a quick flick and a long drag both close; focus
+    returns to the FAB.
+- Known issues:
+  - Uploaded photos live in localStorage (~5MB per site), so roughly a few
+    dozen photos at most. IndexedDB would remove that ceiling.
+  - Export uses an <a download> blob. In an iOS home-screen web app this can
+    open a preview rather than save a file (revisit with the Web Share API
+    in Step 6).

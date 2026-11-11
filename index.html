@@ -17,6 +17,16 @@
 </head>
 <body>
   <div class="page">
+    <div class="banner" id="storage-banner" role="status" hidden>
+      <span class="banner__icon" aria-hidden="true">✦</span>
+      <span class="banner__text">Saving isn't available in this browser, so changes will last until you close this tab.</span>
+      <button type="button" class="banner__close" id="banner-close" aria-label="Dismiss">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+          <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+
     <header class="hero">
       <button type="button" class="icon-btn hero__menu" id="settings-btn"
               aria-label="Settings" aria-haspopup="menu" aria-expanded="false">
@@ -70,29 +80,145 @@
     </footer>
   </div>
 
-  <dialog class="dialog" id="reset-dialog" aria-labelledby="reset-title" aria-describedby="reset-text">
+  <!-- Floating "add" button -->
+  <button type="button" class="fab" id="add-btn" aria-label="Add a gift">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
+      <path d="M11 3v16M3 11h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <!-- Add / edit sheet: bottom sheet on phones, centered dialog from 768px -->
+  <dialog class="sheet" id="item-sheet" aria-labelledby="sheet-title">
+    <div class="sheet__scrim" data-action="close-sheet"></div>
+    <form class="sheet__panel" id="item-form" novalidate>
+      <header class="sheet__header" id="sheet-drag">
+        <span class="sheet__handle" aria-hidden="true"></span>
+        <h2 class="sheet__title" id="sheet-title" tabindex="-1">Add a gift</h2>
+        <button type="button" class="icon-btn sheet__close" data-action="close-sheet" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+            <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="sheet__body" id="sheet-body">
+        <div class="field">
+          <label class="field__label" for="f-name">Name</label>
+          <input class="input" id="f-name" name="name" type="text" maxlength="120"
+                 autocomplete="off" enterkeyhint="next" aria-describedby="e-name" required>
+          <p class="field__error" id="e-name"></p>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="field__label" for="f-category">Category</label>
+            <select class="input input--select" id="f-category" name="category"></select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="f-price">Estimated price</label>
+            <div class="input-wrap">
+              <span class="input-wrap__prefix" aria-hidden="true">$</span>
+              <input class="input input--money" id="f-price" name="price" type="text" inputmode="decimal"
+                     autocomplete="off" enterkeyhint="next" aria-describedby="e-price" required>
+            </div>
+            <p class="field__error" id="e-price"></p>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="f-link">Link <span class="field__optional">optional</span></label>
+          <input class="input" id="f-link" name="link" type="url" inputmode="url" autocomplete="off"
+                 autocapitalize="off" spellcheck="false" placeholder="https://" aria-describedby="e-link">
+          <p class="field__error" id="e-link"></p>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="f-notes">Notes <span class="field__optional">optional</span></label>
+          <textarea class="input input--textarea" id="f-notes" name="notes" rows="3" maxlength="500"></textarea>
+        </div>
+
+        <fieldset class="field field--fieldset">
+          <legend class="field__label">Status</legend>
+          <div class="segmented" id="f-status"></div>
+        </fieldset>
+
+        <div class="field" id="paid-field">
+          <label class="field__label" for="f-paid">Paid <span class="field__optional">optional</span></label>
+          <div class="input-wrap">
+            <span class="input-wrap__prefix" aria-hidden="true">$</span>
+            <input class="input input--money" id="f-paid" name="paid" type="text" inputmode="decimal"
+                   autocomplete="off" aria-describedby="e-paid h-paid">
+          </div>
+          <p class="field__hint" id="h-paid">Leave empty to count the estimate.</p>
+          <p class="field__error" id="e-paid"></p>
+        </div>
+
+        <div class="field">
+          <span class="field__label" id="photo-label">Photo <span class="field__optional">optional</span></span>
+          <div class="photo">
+            <div class="photo__preview card__media" id="photo-preview" data-photo="none">
+              <img class="card__img" id="photo-img" alt="" hidden>
+              <span class="card__emoji" id="photo-emoji" aria-hidden="true"></span>
+            </div>
+            <div class="photo__side">
+              <button type="button" class="btn btn--ghost btn--sm" id="photo-toggle"
+                      aria-expanded="false" aria-controls="photo-options">Add photo</button>
+              <button type="button" class="btn btn--text btn--sm" id="photo-remove" hidden>Remove</button>
+            </div>
+          </div>
+          <div class="photo__options" id="photo-options" hidden>
+            <label class="btn btn--ghost btn--sm photo__upload">
+              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect x="1.5" y="3" width="13" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                <circle cx="5.5" cy="6.5" r="1.2" fill="currentColor"/>
+                <path d="M2 12l4-3.5 3 2.5 2-1.5 3.5 2.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+              </svg>
+              <span id="photo-upload-label">Upload from library</span>
+              <input type="file" accept="image/*" class="visually-hidden" id="photo-file">
+            </label>
+            <div class="photo__or" aria-hidden="true">or</div>
+            <div class="photo__url">
+              <label class="visually-hidden" for="photo-url">Image URL</label>
+              <input class="input" id="photo-url" type="url" inputmode="url" autocomplete="off"
+                     autocapitalize="off" spellcheck="false" placeholder="Paste an image URL"
+                     enterkeyhint="done" aria-describedby="photo-error">
+              <button type="button" class="btn btn--ghost btn--sm" id="photo-url-apply">Use</button>
+            </div>
+          </div>
+          <p class="field__error" id="photo-error" role="alert"></p>
+        </div>
+
+        <p class="sheet__error" id="sheet-error" role="alert"></p>
+      </div>
+
+      <footer class="sheet__footer">
+        <button type="button" class="btn btn--ghost" data-action="close-sheet">Cancel</button>
+        <button type="submit" class="btn btn--solid" id="sheet-save" disabled>Add gift</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Generic confirmation dialog (reset, import) -->
+  <dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
     <form method="dialog" class="dialog__body">
       <p class="dialog__sparkle" aria-hidden="true">✦</p>
-      <h2 class="dialog__title" id="reset-title">Reset to the original list?</h2>
-      <p class="dialog__text" id="reset-text">
-        This brings back all the original gifts and clears every status and paid
-        price you've entered. It can't be undone.
-      </p>
+      <h2 class="dialog__title" id="confirm-title"></h2>
+      <p class="dialog__text" id="confirm-text"></p>
       <div class="dialog__actions">
         <button class="btn btn--ghost" value="cancel" autofocus>Cancel</button>
-        <button class="btn btn--solid" value="reset">Reset list</button>
+        <button class="btn btn--solid" value="confirm" id="confirm-ok">Confirm</button>
       </div>
     </form>
   </dialog>
 
-  <div class="banner" id="storage-banner" role="status" hidden>
-    <span class="banner__text">Saving isn't available in this browser, so changes will last until you close this tab.</span>
-    <button type="button" class="banner__close" id="banner-close" aria-label="Dismiss">
-      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-        <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-    </button>
+  <!-- Toast (Undo, confirmations, errors) -->
+  <div class="toast" id="toast" hidden>
+    <span class="toast__msg" id="toast-msg"></span>
+    <span class="toast__sep" id="toast-sep" aria-hidden="true">·</span>
+    <button type="button" class="toast__action" id="toast-action"></button>
   </div>
+
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
 
   <p class="visually-hidden" id="status-hint">Long-press or right-click to choose any status.</p>
   <p class="visually-hidden" id="announcer" aria-live="polite"></p>
