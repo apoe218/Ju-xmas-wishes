@@ -33,8 +33,11 @@ with a dashboard of budget vs. spent.
   --line: #ECE6DF (hairline borders)
   --success: #8FB89A (wrapped/done)
 - Status colors: Wishlist = silver-tint bg / ink-soft text;
-  Considering = #FFF1D6 / #9A6B12; Ordered = #E3ECF7 / #3E6496;
-  Wrapped = blush-tint / blush-deep.
+  Considering = #FFF1D6 / #86590C; Ordered = #E3ECF7 / #3E6496;
+  Wrapped = blush-tint / blush-ink.
+- Accent text + focus rings use --blush-ink: #95505E (added in Step 5: blush-deep
+  text was only 2.5–2.9:1). Keep --blush-deep for decorative glyphs/borders only.
+  All text meets WCAG AA (≥ 4.5:1).
 - Typography: headings in "Cormorant Garamond" (600, slightly tight letter
   spacing); body and UI in "Inter" (400/500/600). Base 16px, line-height 1.5.
   Prices use tabular numbers (font-variant-numeric: tabular-nums).
@@ -336,3 +339,73 @@ with a dashboard of budget vs. spent.
     long lists would cost more per tap.
   - The ring animates stroke-dashoffset (paint, not composite) — fine at
     this size.
+
+### Step 5: polish and QA
+- Before → after:
+  - Contrast: Shop text, Wrapped pill and menu checks were blush-deep on
+    white/tint (2.5–2.9:1) → new --blush-ink #95505E (4.98–5.85:1).
+    Considering pill #9A6B12 (4.19:1) → #86590C (5.45:1). All text pairs are
+    now AA.
+  - Focus ring: blush-deep at 2.7:1 vs cream → blush-ink at 5.5:1, one 2px
+    ring everywhere. Chips' ring hugs the visible pill.
+  - Touch targets: chips 38/34px, sort 36px, icon buttons 40px, menu items
+    40px, paid field 40px, segmented 40px, small buttons 36px → every control
+    is ≥ 44×44. Chips use a transparent border, because a pseudo-element hit
+    area was clipped by the scroll container (found with an elementFromPoint
+    probe). Menu items got a 2px gap so adjacent targets never touch.
+  - Desktop chips: they wrapped with "Home" orphaned on its own row (1440) or
+    split 7+2 (1024) → one row that scrolls with edge fades below 1240px, and
+    a centred single line from 1240px.
+  - Dashboard: "$144,981" overflowed 4-up tiles at 768px → value font sized by
+    container units and the longest amount's length (--chars), shared by all
+    three money tiles. On 2-up phone tiles the ring's caption hides (a
+    container query), so the ring never squeezes text into three lines.
+  - Spacing: ~20 off-scale values (6/10/11/14/18px) snapped to the 4–64px
+    scale. Radius tokens --r-md (16) and --r-sm (8) for menus, banners and
+    items.
+  - Empty states: filter → serif "Nothing here yet ✦" + "No gifts match Bags ·
+    Wrapped." + "Show all" (focus moves to the Gifts heading). Empty list → "A
+    blank page ✦" + Add a gift. Storage banner copy now suggests Export.
+  - Screen readers:
+    - A separate polite live region for totals ("Spent now $128.").
+    - Hint and live paragraphs moved inside <main> (axe "region").
+    - "Skip to the gifts" link; the FAB moved early in the tab order (skip →
+      settings → add → filters → cards).
+    - The Shop link's accessible name includes the shop's domain.
+  - Details:
+    - Paper grain (inline feTurbulence SVG, 3%, fixed under content).
+    - Sticky filter bar that turns frosted (backdrop blur + hairline) once the
+      header scrolls away, via an IntersectionObserver sentinel.
+    - Domain hint under each Shop button ("rimowa.com", "loropiana.com";
+      www./shop./us. stripped).
+    - Gift-box favicon in blush and silver.
+    - Card :focus-within matches :hover (lift + deeper shadow).
+  - Code: no unused functions, els refs or CSS classes (checked by script).
+    One-line comments on every major function.
+- Tested:
+  - New QA suite (33 checks), all passing:
+    - axe-core WCAG 2.1 A/AA + best-practice with zero violations (page and
+      open sheet).
+    - Real hit-area probe on every visible control (phone, grid, sheet,
+      menu).
+    - Tab order and the focus-ring colour on 16 stops; skip link.
+    - Live announcements; all three empty/edge states; domain hints;
+      favicon; grain; sticky/frosted bar.
+    - Sweep at 375/390/430/768/1024/1440 with a stress list (122-char name,
+      $128,500 price, empty notes, every status): no overflow, one-line
+      dashboard values, unclipped chips and pills, names clamped to 2 lines,
+      even tile heights.
+  - All earlier suites still pass (81 + 78 + 48), with no console errors.
+  - Totals: 240 automated checks.
+- Top 5 ideas (not built):
+  1. Move photos (and maybe the list) to IndexedDB: no ~5MB ceiling, and
+     saves don't re-serialise every photo on each tap.
+  2. Optional sync between devices (e.g. a private GitHub Gist or a tiny
+     backend) so the iPhone and laptop share one list instead of
+     export/import.
+  3. Per-gift reminders and a "buy by" date with a gentle countdown (and an
+     "ordered but not arrived" nudge), possibly as .ics calendar files.
+  4. Price watch: store a target price and highlight when the paid price beats
+     it; show "saved so far" across the whole list.
+  5. Gift-giving mode: a hidden-from-Juliana share link / PIN lock, plus a
+     print-friendly checklist for wrapping night.

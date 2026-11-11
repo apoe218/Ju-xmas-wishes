@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#FAF7F2">
   <meta name="description" content="A curated gift tracker for Juliana's Christmas wishlist.">
   <title>Juliana's Christmas Wishlist</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23F8E9EB'/%3E%3Ctext x='32' y='45' font-size='36' text-anchor='middle' fill='%23C98591'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23FAF7F2'/%3E%3Crect x='12' y='27' width='40' height='27' rx='4' fill='%23E8B4BC'/%3E%3Crect x='9' y='19' width='46' height='10' rx='3' fill='%23F1C6CD'/%3E%3Crect x='28' y='19' width='8' height='35' fill='%23BFC3C7'/%3E%3Cpath d='M32 19c-3-9-15-12-15-4 0 5 9 4 15 4z' fill='%23C98591'/%3E%3Cpath d='M32 19c3-9 15-12 15-4 0 5-9 4-15 4z' fill='%23C98591'/%3E%3Ccircle cx='32' cy='19' r='3' fill='%23B97683'/%3E%3C/svg%3E">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,10 +21,11 @@
   <script type="module" src="./app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#gifts-heading">Skip to the gifts</a>
   <div class="page">
     <div class="banner" id="storage-banner" role="status" hidden>
       <span class="banner__icon" aria-hidden="true">✦</span>
-      <span class="banner__text">Saving isn't available in this browser, so changes will last until you close this tab.</span>
+      <span class="banner__text">This browser isn't letting the app save, so changes will last until you close this tab. Use ⋯ → Export backup to keep a copy.</span>
       <button type="button" class="banner__close" id="banner-close" aria-label="Dismiss">
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
           <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -46,6 +47,13 @@
       <p class="hero__subtitle" id="subtitle">Gifts curated from her Pinterest board</p>
     </header>
 
+    <!-- Floating "add" button (fixed; placed here so it comes early in the tab order) -->
+    <button type="button" class="fab" id="add-btn" aria-label="Add a gift">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
+        <path d="M11 3v16M3 11h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </button>
+
     <main>
       <div class="celebrate" id="celebrate" role="status" hidden>
         <p class="celebrate__title">Every gift is wrapped <span class="sparkle" aria-hidden="true">✦</span></p>
@@ -58,13 +66,17 @@
       </section>
 
       <section id="gifts" aria-labelledby="gifts-heading">
-        <h2 class="visually-hidden" id="gifts-heading">Gifts</h2>
+        <h2 class="visually-hidden" id="gifts-heading" tabindex="-1">Gifts</h2>
 
-        <div class="filters">
-          <div class="filters__scroller" id="category-filters" role="group" aria-label="Filter by category"></div>
-        </div>
-        <div class="filters filters--status">
-          <div class="filters__scroller" id="status-filters" role="group" aria-label="Filter by status"></div>
+        <!-- Sticks to the top once you scroll past the header (frosted when stuck) -->
+        <div class="controls-sentinel" id="controls-sentinel" aria-hidden="true"></div>
+        <div class="controls" id="controls">
+          <div class="filters">
+            <div class="filters__scroller" id="category-filters" role="group" aria-label="Filter by category"></div>
+          </div>
+          <div class="filters filters--status">
+            <div class="filters__scroller" id="status-filters" role="group" aria-label="Filter by status"></div>
+          </div>
         </div>
 
         <div class="toolbar">
@@ -91,6 +103,11 @@
           <div class="grid grid--wrapped" id="wrapped-grid"></div>
         </section>
       </section>
+
+      <!-- Screen-reader helpers (inside <main> so they belong to a landmark) -->
+      <p class="visually-hidden" id="status-hint">Long-press or right-click to choose any status.</p>
+      <p class="visually-hidden" id="announcer" aria-live="polite"></p>
+      <p class="visually-hidden" id="announcer-totals" aria-live="polite"></p>
     </main>
 
     <footer class="footer">
@@ -98,12 +115,6 @@
     </footer>
   </div>
 
-  <!-- Floating "add" button -->
-  <button type="button" class="fab" id="add-btn" aria-label="Add a gift">
-    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
-      <path d="M11 3v16M3 11h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    </svg>
-  </button>
 
   <!-- Add / edit sheet: bottom sheet on phones, centered dialog from 768px -->
   <dialog class="sheet" id="item-sheet" aria-labelledby="sheet-title">
@@ -262,7 +273,5 @@
 
   <input type="file" id="import-file" accept="application/json,.json" hidden>
 
-  <p class="visually-hidden" id="status-hint">Long-press or right-click to choose any status.</p>
-  <p class="visually-hidden" id="announcer" aria-live="polite"></p>
 </body>
 </html>

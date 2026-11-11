@@ -120,9 +120,19 @@ function normalizeLink(text) {
 
 const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
+/** "https://www.rimowa.com/us/…" → "rimowa.com" (shown under the Shop button). */
+function domainOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^(www|shop|us)\./, "");
+  } catch {
+    return "";
+  }
+}
+
 const clone = (value) =>
   typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
 
+/** Local YYYY-MM-DD for backup filenames. */
 function localDateStamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -145,6 +155,7 @@ function isQuotaError(err) {
   );
 }
 
+/** localStorage wrapper that never throws: falls back to memory if storage is blocked. */
 function createStore(key) {
   let memory = null;
   let available = true;
@@ -191,6 +202,7 @@ const store = createStore(STORAGE_KEY);
 
 const isMoney = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
+/** Shape check for one stored/imported item (types, status enum, non-negative money). */
 function isValidItem(item) {
   return (
     item !== null &&
@@ -207,6 +219,7 @@ function isValidItem(item) {
   );
 }
 
+/** A valid list: every item valid and ids unique. */
 function isValidItems(value) {
   return (
     Array.isArray(value) &&
@@ -215,6 +228,7 @@ function isValidItems(value) {
   );
 }
 
+/** Items from storage, or a fresh copy of the seed list if missing/invalid. */
 function loadItems() {
   const raw = store.read();
   if (raw) {
@@ -262,6 +276,7 @@ const isPurchased = (item) => PURCHASED.has(item.status);
 const matchesCategory = (item, filter = state.filter) => filter === "All" || item.category === filter;
 const matchesStatus = (item, status = state.status) => status === "All" || item.status === status;
 
+/** Dashboard numbers: total estimate, spent (paid ?? price for ordered/wrapped), remaining, counts. */
 function computeStats(items) {
   const purchased = items.filter(isPurchased);
   const total = items.reduce((sum, item) => sum + item.price, 0);
@@ -270,6 +285,7 @@ function computeStats(items) {
   return { total, spent, remaining: total - spent, bought: purchased.length, wrapped, count: items.length };
 }
 
+/** Items matching both filters, in the chosen sort (ties keep list order). */
 function getVisibleItems() {
   const order = new Map(state.items.map((item, i) => [item.id, i]));
   const compare = SORTS[state.sort] ?? SORTS.default;
@@ -326,12 +342,14 @@ function setStatus(id, status) {
 
 const isAllWrapped = () => state.items.length > 0 && state.items.every((i) => i.status === "wrapped");
 
+/** Pill tap: Wishlist → Considering → Ordered → Wrapped → Wishlist. */
 function cycleStatus(id) {
   const item = findItem(id);
   if (!item) return;
   setStatus(id, STATUSES[(STATUSES.indexOf(item.status) + 1) % STATUSES.length]);
 }
 
+/** Save a card's inline Paid input (blur/Enter); invalid input reverts. */
 function commitPaid(input) {
   const item = findItem(input.closest(".card")?.dataset.id);
   if (!item) return;
@@ -350,6 +368,7 @@ function commitPaid(input) {
 
 let lastDeleted = null; // { item, index } for Undo
 
+/** Remove a gift, move focus to a neighbour, offer Undo for 6s. */
 function deleteItem(id) {
   const index = state.items.findIndex((item) => item.id === id);
   if (index === -1) return;
@@ -371,6 +390,7 @@ function deleteItem(id) {
   showToast("Item removed", { actionLabel: "Undo", onAction: undoDelete, duration: UNDO_MS });
 }
 
+/** Put the last deleted gift back at its original position. */
 function undoDelete() {
   if (!lastDeleted) return;
   const { item, index } = lastDeleted;
@@ -383,6 +403,7 @@ function undoDelete() {
   cardEls.get(item.id)?.querySelector(".card__more")?.focus({ preventScroll: true });
 }
 
+/** Restore the original 14 seed gifts (after confirmation). */
 function resetItems() {
   state.items = clone(seedItems);
   resetView();
@@ -391,6 +412,7 @@ function resetItems() {
   announce("Reset to the original list.");
 }
 
+/** Back to All / All statuses / Default order. */
 function resetView() {
   state.filter = "All";
   state.status = "All";
@@ -421,6 +443,10 @@ const els = {
   banner: $("#storage-banner"),
   bannerClose: $("#banner-close"),
   announcer: $("#announcer"),
+  announcerTotals: $("#announcer-totals"),
+  giftsHeading: $("#gifts-heading"),
+  controls: $("#controls"),
+  controlsSentinel: $("#controls-sentinel"),
   // Sheet
   sheet: $("#item-sheet"),
   sheetPanel: $("#item-form"),
@@ -514,10 +540,12 @@ function render() {
   playFlip(flip);
 }
 
+/** Show the "Every gift is wrapped" banner when everything is wrapped. */
 function renderCelebration() {
   setHidden(els.celebrate, !isAllWrapped());
 }
 
+/** Subtitle with the live gift count. */
 function renderHeader() {
   setText(els.subtitle, `${plural(state.items.length, "gift", "gifts")} · curated from her Pinterest board`);
 }
@@ -563,14 +591,20 @@ const RING_C = 2 * Math.PI * RING_R;
 
 let lastStats = null;
 
+/** Update dashboard tiles + ring (tweened) and announce spend changes. */
 function renderStats() {
   const s = computeStats(state.items);
   const pct = s.count ? Math.round((s.wrapped / s.count) * 100) : 0;
   const el = (key) => els.stats.querySelector(`[data-stat="${key}"]`);
 
-  tween("total", s.total, (v) => setText(el("total"), formatMoney(Math.round(v))));
-  tween("spent", s.spent, (v) => setText(el("spent"), formatMoney(Math.round(v))));
-  tween("remaining", s.remaining, (v) => setText(el("remaining"), formatMoney(Math.round(v))));
+  // The longest final amount sets one font size for all three money tiles
+  // (CSS reads --chars), so long values never wrap and the tiles stay even.
+  const chars = String(Math.max(...[s.total, s.spent, s.remaining].map((v) => formatMoney(v).length)));
+  if (els.stats.style.getPropertyValue("--chars") !== chars) els.stats.style.setProperty("--chars", chars);
+  const money = (key) => (v) => setText(el(key), formatMoney(Math.round(v)));
+  tween("total", s.total, money("total"));
+  tween("spent", s.spent, money("spent"));
+  tween("remaining", s.remaining, money("remaining"));
   tween("wrapped", s.wrapped, (v) => setText(el("wrapped"), `${Math.round(v)} / ${s.count}`));
   tween("ring", s.count ? s.wrapped / s.count : 0, (v) => {
     els.ringFill.setAttribute("stroke-dashoffset", (RING_C * (1 - v)).toFixed(2));
@@ -641,6 +675,7 @@ function buildFilters() {
     .join("");
 }
 
+/** Active state, zero state and count for one filter chip. */
 function updateChip(chip, active, count) {
   chip.classList.toggle("is-active", active);
   chip.classList.toggle("is-zero", count === 0);
@@ -648,6 +683,7 @@ function updateChip(chip, active, count) {
   setText(chip.querySelector(".chip__count"), String(count));
 }
 
+/** Refresh both chip rows (faceted counts) and the sort select. */
 function renderFilters() {
   // Counts are faceted: each row's counts respect the *other* row's filter.
   for (const chip of els.categoryFilters.children) {
@@ -681,6 +717,7 @@ function revealChip(chip) {
 const cardEls = new Map();
 const emptyEls = {};
 
+/** Build a card's DOM once; updateCard() fills and refreshes it. */
 function createCard(item) {
   const el = document.createElement("article");
   el.className = "card";
@@ -723,6 +760,7 @@ function createCard(item) {
           Shop <span class="btn__arrow" aria-hidden="true">↗</span>
           <span class="visually-hidden" data-role="shop-sr"></span>
         </a>
+        <p class="card__domain" aria-hidden="true"></p>
       </div>
     </div>`;
   return el;
@@ -748,6 +786,7 @@ const RIBBON_SVG = `
     </g>
   </svg>`;
 
+/** Patch one card from its item (change-only writes; pulses the pill on status change). */
 function updateCard(el, item) {
   const q = (selector) => el.querySelector(selector);
   const label = STATUS_LABELS[item.status];
@@ -801,8 +840,10 @@ function updateCard(el, item) {
   const href = safeUrl(item.link);
   setHidden(q(".card__actions"), !href);
   if (href) {
+    const domain = domainOf(href);
     setAttr(q(".btn--outline"), "href", href);
-    setText(q('[data-role="shop-sr"]'), `${item.name} (opens in a new tab)`);
+    setText(q('[data-role="shop-sr"]'), `${item.name} at ${domain} (opens in a new tab)`);
+    setText(q(".card__domain"), domain);
   }
 }
 
@@ -818,14 +859,15 @@ function getEmptyEl(kind) {
            <p class="empty__text">Add the first gift to start Juliana's list.</p>
            <button type="button" class="btn btn--solid btn--inline" data-action="add-first">Add a gift</button>`
         : `<p class="empty__sparkle" aria-hidden="true">✦</p>
-           <p class="empty__title">No gifts here</p>
+           <p class="empty__title">Nothing here yet</p>
            <p class="empty__text"></p>
-           <button type="button" class="btn btn--outline btn--inline" data-action="clear-filters">Show all gifts</button>`;
+           <button type="button" class="btn btn--outline btn--inline" data-action="clear-filters">Show all</button>`;
     emptyEls[kind] = el;
   }
   return emptyEls[kind];
 }
 
+/** Place cards into the main grid / Wrapped section, plus empty states and the count. */
 function renderGrid() {
   const visible = getVisibleItems();
   const liveIds = new Set(state.items.map((item) => item.id));
@@ -853,7 +895,7 @@ function renderGrid() {
         state.filter !== "All" ? state.filter : null,
         state.status !== "All" ? STATUS_LABELS[state.status] : null,
       ].filter(Boolean);
-      setText(empty.querySelector(".empty__text"), `Nothing matches ${filters.join(" · ")}.`);
+      setText(empty.querySelector(".empty__text"), `No gifts match ${filters.join(" · ")}.`);
       active.push(empty);
     }
   }
@@ -968,6 +1010,7 @@ function playFlip(first) {
 // ==========================================================================
 
 let announceTimer;
+/** Polite screen-reader message (re-announces even if the text repeats). */
 function announce(message) {
   clearTimeout(announceTimer);
   els.announcer.textContent = "";
@@ -976,15 +1019,19 @@ function announce(message) {
   }, 60);
 }
 
-// Dashboard totals get their own (debounced) announcement so they don't
+// Dashboard totals get their own live region (debounced) so they don't
 // trample the status message that triggered them.
 let totalsTimer;
 function announceTotals(message) {
   clearTimeout(totalsTimer);
-  totalsTimer = setTimeout(() => announce(message), 900);
+  els.announcerTotals.textContent = "";
+  totalsTimer = setTimeout(() => {
+    els.announcerTotals.textContent = message;
+  }, 400);
 }
 
 let bannerDismissed = false;
+/** Calm inline notice when the browser blocks storage. */
 function showStorageBanner() {
   if (!bannerDismissed) els.banner.hidden = false;
 }
@@ -1026,6 +1073,7 @@ function showToast(message, { actionLabel = "", onAction = null, duration = 3500
   toastClock.finished.then(() => hideToast(), () => {});
 }
 
+/** Slide the toast away and drop its action. */
 function hideToast() {
   clearTimeout(toastTimer);
   toastClock?.cancel();
@@ -1062,6 +1110,7 @@ function pauseToast(paused) {
 let menu = null; // { el, anchor }
 let suppressClickOn = null; // element whose next click should be ignored
 
+/** Generic popover menu (role=menu) anchored to a button; focuses the checked/first item. */
 function openMenu(anchor, { label, items, onSelect }) {
   closeMenu({ restoreFocus: false });
 
@@ -1103,6 +1152,7 @@ function openMenu(anchor, { label, items, onSelect }) {
   initial?.focus({ preventScroll: true });
 }
 
+/** Place a menu under (or above) its anchor, clamped to the viewport. */
 function positionMenu(el, anchor) {
   const gap = 6;
   const margin = 8;
@@ -1121,6 +1171,7 @@ function positionMenu(el, anchor) {
   el.style.top = `${top + window.scrollY}px`;
 }
 
+/** Remove the open menu, optionally returning focus to its anchor. */
 function closeMenu({ restoreFocus = true } = {}) {
   if (!menu) return;
   const { el, anchor } = menu;
@@ -1130,6 +1181,7 @@ function closeMenu({ restoreFocus = true } = {}) {
   if (restoreFocus && anchor.isConnected) anchor.focus({ preventScroll: true });
 }
 
+/** Arrow/Home/End navigation; Escape or Tab closes. */
 function onMenuKeydown(e) {
   const items = [...menu.el.querySelectorAll(".menu__item")];
   const i = items.indexOf(document.activeElement);
@@ -1148,6 +1200,7 @@ function onMenuKeydown(e) {
   }
 }
 
+/** Long-press / right-click picker to jump straight to any status. */
 function openStatusMenu(pill) {
   const id = pill.closest(".card")?.dataset.id;
   const item = findItem(id);
@@ -1159,6 +1212,7 @@ function openStatusMenu(pill) {
   });
 }
 
+/** Card ⋯ menu: Edit / Delete. */
 function openCardMenu(button) {
   const id = button.closest(".card")?.dataset.id;
   const item = findItem(id);
@@ -1173,6 +1227,7 @@ function openCardMenu(button) {
   });
 }
 
+/** Header ⋯ menu: Export, Import, Reset. */
 function openSettingsMenu() {
   openMenu(els.settingsBtn, {
     label: "Settings",
@@ -1206,6 +1261,7 @@ function handleMenuButton(button, open) {
 
 let press = null; // { pill, x, y, timer }
 
+/** Begin timing a press on a status pill (opens the picker after 500ms). */
 function startLongPress(pill, e) {
   cancelLongPress();
   press = {
@@ -1220,6 +1276,7 @@ function startLongPress(pill, e) {
   };
 }
 
+/** Abort a pending long press (release, movement, scroll). */
 function cancelLongPress() {
   if (!press) return;
   clearTimeout(press.timer);
@@ -1244,6 +1301,7 @@ function confirmDialog({ title, text, confirmLabel }) {
   });
 }
 
+/** Confirm, then reset to the seed list. */
 async function confirmReset() {
   const ok = await confirmDialog({
     title: "Reset to the original list?",
@@ -1290,6 +1348,7 @@ function parseBackup(text) {
   return { items, exportedAt: exportedAt && !Number.isNaN(exportedAt.getTime()) ? exportedAt : null };
 }
 
+/** Read, validate, preview and (on confirm) replace the list from a backup file. */
 async function importBackup(file) {
   if (!file) return;
   if (file.size > MAX_IMPORT_BYTES) {
@@ -1368,6 +1427,7 @@ const sheet = {
   touched: new Set(),
 };
 
+/** Fill the sheet's category select and status segmented control. */
 function buildSheet() {
   const select = els.itemForm.elements.category;
   select.innerHTML = CATEGORIES.map((c) => `<option value="${c.name}">${c.emoji}  ${c.name}</option>`).join("");
@@ -1380,6 +1440,7 @@ function buildSheet() {
   ).join("");
 }
 
+/** Open the add/edit sheet, prefilled for edit, and remember what opened it. */
 function openSheet(mode, id = null, trigger = document.activeElement) {
   const item = id ? findItem(id) : null;
   if (mode === "edit" && !item) return;
@@ -1440,6 +1501,7 @@ function onSheetClosed() {
   target.focus({ preventScroll: true });
 }
 
+/** Spring the sheet up (phones) or scale it in (desktop); fade the scrim. */
 function animateSheetIn() {
   if (prefersReducedMotion()) return;
   els.sheetScrim.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: "linear" });
@@ -1497,6 +1559,7 @@ function animateSheetOut(velocity = 0) {
 
 let drag = null; // { startY, samples: [{ y, t }], height }
 
+/** Sheet header drag (phones): start tracking the finger. */
 function onDragStart(e) {
   if (isWide() || !sheet.open || sheet.closing || e.button > 0 || e.target.closest("button")) return;
   els.sheetPanel.getAnimations().forEach((a) => a.cancel());
@@ -1504,6 +1567,7 @@ function onDragStart(e) {
   els.sheetDrag.setPointerCapture(e.pointerId);
 }
 
+/** Follow the finger; resist upward pulls; fade the scrim with distance. */
 function onDragMove(e) {
   if (!drag) return;
   const dy = e.clientY - drag.startY;
@@ -1514,6 +1578,7 @@ function onDragMove(e) {
   if (drag.samples.length > 6) drag.samples.shift();
 }
 
+/** Close on a long drag or a downward flick; otherwise spring back. */
 function onDragEnd() {
   if (!drag) return;
   const { samples, startY, height } = drag;
@@ -1580,6 +1645,7 @@ function validateSheet({ showAll = false } = {}) {
   return { valid, values: v };
 }
 
+/** Validate and save the sheet; on a full store, roll back and explain. */
 function submitSheet() {
   const { valid, values } = validateSheet({ showAll: true });
   if (!valid || sheet.busy) return;
@@ -1650,6 +1716,7 @@ function setPhotoOptions(open) {
   setAttr(els.photoToggle, "aria-expanded", String(open));
 }
 
+/** Sheet photo thumbnail + Add/Change/Remove buttons. */
 function updatePhotoPreview() {
   const category = els.itemForm.elements.category.value;
   setClass(els.photoPreview, `photo__preview card__media card__media--${slug(category)}`);
@@ -1659,6 +1726,7 @@ function updatePhotoPreview() {
   setHidden(els.photoRemove, !sheet.image);
 }
 
+/** Upload: resize to ≤800px JPEG data URL, then preview. */
 async function onPhotoFile() {
   const file = els.photoFile.files?.[0];
   els.photoFile.value = "";
@@ -1680,6 +1748,7 @@ async function onPhotoFile() {
   }
 }
 
+/** Use a pasted image URL (http/https only). */
 function applyPhotoUrl() {
   const url = normalizeLink(els.photoUrl.value);
   if (!url) {
@@ -1735,6 +1804,7 @@ function bindEvents() {
       state.filter = "All";
       state.status = "All";
       render();
+      els.giftsHeading.focus({ preventScroll: true }); // the button just disappeared
       return;
     }
     if (e.target.closest('[data-action="add-first"]')) openSheet("add", null, e.target.closest("button"));
@@ -1907,6 +1977,13 @@ function bindEvents() {
     els.banner.hidden = true;
   });
 
+  // Frosted sticky filter bar once the header has scrolled away.
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(([entry]) => {
+      els.controls.classList.toggle("is-stuck", !entry.isIntersecting && entry.boundingClientRect.top < 0);
+    }).observe(els.controlsSentinel);
+  }
+
   // Keep multiple open tabs in sync.
   window.addEventListener("storage", (e) => {
     if (e.key !== null && e.key !== STORAGE_KEY) return;
@@ -2021,6 +2098,7 @@ function confetti({ x = 0, y = 0, count = 40, shower = false } = {}) {
   }
 }
 
+/** Match the confetti canvas to the viewport (DPR ≤ 2). */
 function sizeConfetti() {
   const { canvas, ctx } = confettiLayer;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2029,6 +2107,7 @@ function sizeConfetti() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
+/** One confetti frame: physics, drawing, and cleanup when done. */
 function tickConfetti(now) {
   const layer = confettiLayer;
   const dt = Math.min(32, now - layer.last);
