@@ -18,6 +18,14 @@
 <body>
   <div class="page">
     <header class="hero">
+      <button type="button" class="icon-btn hero__menu" id="settings-btn"
+              aria-label="Settings" aria-haspopup="menu" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <circle cx="4" cy="10" r="1.6" fill="currentColor"/>
+          <circle cx="10" cy="10" r="1.6" fill="currentColor"/>
+          <circle cx="16" cy="10" r="1.6" fill="currentColor"/>
+        </svg>
+      </button>
       <p class="hero__eyebrow">Christmas 2026 <span class="sparkle" aria-hidden="true">✦</span></p>
       <h1 class="hero__title">Juliana's Wishlist<span class="hero__sparkle" aria-hidden="true">✦</span></h1>
       <p class="hero__subtitle" id="subtitle">Gifts curated from her Pinterest board</p>
@@ -29,12 +37,30 @@
         <div class="stats__grid" id="stats"></div>
       </section>
 
-      <nav class="filters" aria-label="Filter by category">
-        <div class="filters__scroller" id="filters"></div>
-      </nav>
-
       <section aria-labelledby="gifts-heading">
         <h2 class="visually-hidden" id="gifts-heading">Gifts</h2>
+
+        <div class="filters">
+          <div class="filters__scroller" id="category-filters" role="group" aria-label="Filter by category"></div>
+        </div>
+        <div class="filters filters--status">
+          <div class="filters__scroller" id="status-filters" role="group" aria-label="Filter by status"></div>
+        </div>
+
+        <div class="toolbar">
+          <p class="toolbar__count" id="result-count" aria-live="polite"></p>
+          <label class="sort">
+            <span class="sort__label">Sort</span>
+            <select class="sort__select" id="sort">
+              <option value="default">Default order</option>
+              <option value="price-asc">Price: low → high</option>
+              <option value="price-desc">Price: high → low</option>
+              <option value="category">Category A–Z</option>
+              <option value="status">Status</option>
+            </select>
+          </label>
+        </div>
+
         <div class="grid" id="grid"></div>
       </section>
     </main>
@@ -43,5 +69,32 @@
       <p>Made with <span class="sparkle" aria-hidden="true">✦</span><span class="visually-hidden">love</span> for Juliana</p>
     </footer>
   </div>
+
+  <dialog class="dialog" id="reset-dialog" aria-labelledby="reset-title" aria-describedby="reset-text">
+    <form method="dialog" class="dialog__body">
+      <p class="dialog__sparkle" aria-hidden="true">✦</p>
+      <h2 class="dialog__title" id="reset-title">Reset to the original list?</h2>
+      <p class="dialog__text" id="reset-text">
+        This brings back all the original gifts and clears every status and paid
+        price you've entered. It can't be undone.
+      </p>
+      <div class="dialog__actions">
+        <button class="btn btn--ghost" value="cancel" autofocus>Cancel</button>
+        <button class="btn btn--solid" value="reset">Reset list</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="banner" id="storage-banner" role="status" hidden>
+    <span class="banner__text">Saving isn't available in this browser, so changes will last until you close this tab.</span>
+    <button type="button" class="banner__close" id="banner-close" aria-label="Dismiss">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+        <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <p class="visually-hidden" id="status-hint">Long-press or right-click to choose any status.</p>
+  <p class="visually-hidden" id="announcer" aria-live="polite"></p>
 </body>
 </html>

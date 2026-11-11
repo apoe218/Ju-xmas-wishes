@@ -94,3 +94,88 @@ with a dashboard of budget vs. spent.
   - Filter chips are <button>s with aria-pressed but do nothing yet.
   - The edge fade on the chip row is always on below 1024px, even when the
     row is scrolled to its end.
+
+### Step 2: state, status, filters, persistence
+- Built:
+  - `state` = { items, filter, status, sort }. `status` is the status-filter
+    row: an extra field beside the requested { items, filter, sort }.
+  - Items load from localStorage "juliana-wishlist-v1" (a JSON array). If the
+    key is missing, invalid or fails validation, the app deep-copies seedItems.
+  - save() runs after every change; render() drives everything from state.
+  - Status pill: tap cycles the four statuses; long-press (500ms) or
+    right-click opens a picker.
+  - Paid input on Ordered/Wrapped cards, with a "Saved $X" badge.
+  - Dashboard updates live.
+  - Category and status filter rows with faceted counts, plus a sort select.
+  - ⋯ settings menu → "Reset to original list", confirmed in a <dialog>.
+  - Storage banner; empty state; cross-tab sync via the `storage` event.
+- Decisions:
+  - Storage: createStore() probes localStorage once. Every read/write is in
+    try/catch, with an in-memory copy as fallback. If storage is unavailable
+    at load, or a later write throws (e.g. quota), a dismissible banner says
+    changes won't survive closing the tab. Validation checks every field's
+    type, the status enum, non-negative prices and unique ids.
+  - Rendering: card elements are created once per id and patched in place
+    (setText/setAttr/setClass/setHidden only write when a value changes). The
+    grid's children are only replaced when membership or order changes, and
+    focus is put back afterwards. Bug found in testing: re-assigning the
+    pill's textContent on every render made Chrome drop a click that started
+    while a paid input was focused (the blur saved and re-rendered between
+    pointerdown and pointerup). Change-only writes fixed it.
+  - Event delegation on #grid handles pill click/contextmenu/pointerdown,
+    paid keydown/focusout, and the empty state's "Show all gifts".
+  - Long-press: after it opens the picker, the release's click is suppressed;
+    moving more than 10px or a pointercancel (scroll) aborts it. The pill has
+    -webkit-touch-callout:none and user-select:none so iOS doesn't show its
+    own callout, plus a ::after hit area for a larger touch target.
+    Shift+F10 / the ContextMenu key open the picker from the keyboard.
+  - Popover (shared by the status picker and settings): role=menu with
+    menuitemradio items; arrow keys, Home/End, Escape and Tab work; it closes
+    on outside press or resize. Pressing the anchor while it's open just
+    closes it. Focus goes back to the anchor before the action runs, so the
+    reset dialog returns focus to ⋯ when it closes.
+  - Paid: accepts "118", "$1,200.50" etc. and rounds to cents. Empty clears
+    it (null → the estimate counts). Invalid or negative input reverts.
+    Escape reverts; Enter or blur saves. The value is kept when the status
+    leaves Ordered/Wrapped (it just stops counting), so cycling past by
+    accident doesn't lose it. Saved badge shows only when paid < estimate;
+    cents appear only when non-zero ("Saved $9.75"). Dashboard stays
+    whole-dollar.
+  - Spent caption is "N of 14 bought". Remaining = Total − Spent, so it goes
+    up when you pay under the estimate.
+  - Filter counts are faceted: category counts respect the status filter and
+    vice versa. Zero-count chips are muted but still clickable. Active chips
+    are blush with ink text. Tapping a chip near the edge of its row scrolls
+    it into view.
+  - Sort ties fall back to the original list order (stable).
+  - Reset also resets filters and sort to defaults.
+  - The page-load card entrance (Step 1) now runs on first paint only, via
+    .grid.is-entering, so re-renders don't replay it. Everything else is
+    plain CSS transitions (pill colours, chips, progress bar width).
+  - Inputs and the sort select are 16px on mobile to stop iOS zoom-on-focus.
+  - Screen readers: pill aria-label "Status: X. Tap to change." plus an
+    aria-describedby hint about long-press. A polite live region announces
+    status/paid changes, and the result count is aria-live.
+- Tested (Playwright, 81 checks, all passing):
+  - Lululemon → Ordered, paid $118: Spent $118, Remaining $16,363, "Saved
+    $10". Survives a reload.
+  - Wrapped → 1/14 and a 7% bar; full cycle back to Wishlist; paid kept.
+  - Keyboard cycling.
+  - Right-click, mouse long-press and real CDP touch long-press on iPhone 13
+    emulation: none of them cycles on release.
+  - Paid edge cases (commas/$, cents, invalid, negative, Escape, Tab, clear).
+  - Tapping another pill while an input is focused: both actions land.
+  - All 225 category × status × sort combinations match an independently
+    computed order, with the empty state where expected.
+  - Chip counts; "Travel 3"; active chip colours.
+  - Reset: Cancel keeps data; confirming restores seed data in storage.
+  - Corrupt/invalid storage falls back to seed data.
+  - localStorage that throws: banner shows and the app works in memory.
+  - Quota error on save: banner appears.
+  - No horizontal overflow at 390px; no console errors.
+- Known issues:
+  - --blush-deep text contrast (~2.9:1) is still below AA (Shop button,
+    Wrapped pill, menu check).
+  - The chip-row edge fade still shows when the row is scrolled to its end.
+  - iOS Safari long-press was tested in Chromium touch emulation, not on a
+    real iPhone.
