@@ -12,8 +12,13 @@ const PHOTO_MAX_EDGE = 800;
 const PHOTO_QUALITY = 0.8;
 const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
 
-const EASE_OUT = "cubic-bezier(.2, .8, .2, 1)";
-const SPRING = "cubic-bezier(.22, 1.2, .36, 1)"; // slight overshoot
+// Motion tokens (see "Motion principles" in CLAUDE.md)
+const EASE_OUT = "cubic-bezier(.2, .8, .2, 1)"; // entrances
+const SPRING = "cubic-bezier(.22, 1.2, .36, 1)"; // sheets/bows: slight overshoot
+const DUR_MICRO = 200; // 150–250ms micro-interactions
+const DUR_LAYOUT = 380; // 300–450ms layout changes
+const TWEEN_MS = 600; // dashboard numbers
+const WRAP_GLIDE_DELAY = 900; // wrapped card waits this long before gliding away
 
 const CATEGORIES = [
   { name: "Tech", emoji: "📱" },
@@ -234,6 +239,10 @@ const state = {
   sort: "default",
 };
 
+// Cards that just became Wrapped stay in place briefly for the ribbon + confetti
+// moment before gliding into the Wrapped section.
+const pendingWrap = new Map(); // id → timeout
+
 /** Persist items. Returns the store result; shows the banner if storage is gone. */
 function save() {
   const result = store.write(JSON.stringify(state.items));
@@ -286,11 +295,36 @@ function makeId(name) {
 function setStatus(id, status) {
   const item = findItem(id);
   if (!item || !STATUSES.includes(status) || item.status === status) return;
+  const wasAllWrapped = isAllWrapped();
   item.status = status;
   persist();
-  render();
-  announce(`${item.name} is now ${STATUS_LABELS[status]}.`);
+
+  clearTimeout(pendingWrap.get(id));
+  pendingWrap.delete(id);
+
+  const card = cardEls.get(id);
+  const onScreen = card?.isConnected && card.parentElement === els.grid;
+  if (status === "wrapped" && onScreen && !prefersReducedMotion()) {
+    // The wrapped moment: ribbon + confetti now, glide to the Wrapped section shortly after.
+    pendingWrap.set(id, setTimeout(() => {
+      pendingWrap.delete(id);
+      render();
+    }, WRAP_GLIDE_DELAY));
+    render();
+    celebrateWrap(card);
+  } else {
+    render();
+  }
+
+  if (!wasAllWrapped && isAllWrapped()) celebrateAll();
+  announce(
+    status === "wrapped"
+      ? `${item.name} is wrapped and moved to the Wrapped section.`
+      : `${item.name} is now ${STATUS_LABELS[status]}.`
+  );
 }
+
+const isAllWrapped = () => state.items.length > 0 && state.items.every((i) => i.status === "wrapped");
 
 function cycleStatus(id) {
   const item = findItem(id);
@@ -375,7 +409,13 @@ const els = {
   statusFilters: $("#status-filters"),
   resultCount: $("#result-count"),
   sort: $("#sort"),
+  hero: $(".hero"),
+  celebrate: $("#celebrate"),
+  gifts: $("#gifts"),
   grid: $("#grid"),
+  wrappedSection: $("#wrapped-section"),
+  wrappedGrid: $("#wrapped-grid"),
+  wrappedCount: $("#wrapped-count"),
   settingsBtn: $("#settings-btn"),
   addBtn: $("#add-btn"),
   banner: $("#storage-banner"),
@@ -413,6 +453,7 @@ const els = {
   toastMsg: $("#toast-msg"),
   toastSep: $("#toast-sep"),
   toastAction: $("#toast-action"),
+  toastBar: $("#toast-bar"),
   importFile: $("#import-file"),
 };
 
@@ -462,11 +503,19 @@ function onPhotoEvent(e) {
 // Render
 // ==========================================================================
 
+/** Rebuild everything from state. Card moves between renders are FLIP-animated. */
 function render() {
+  const flip = captureCardRects();
   renderHeader();
   renderStats();
   renderFilters();
+  renderCelebration();
   renderGrid();
+  playFlip(flip);
+}
+
+function renderCelebration() {
+  setHidden(els.celebrate, !isAllWrapped());
 }
 
 function renderHeader() {
@@ -492,33 +541,78 @@ function buildStats() {
       <p class="stat__value" data-stat="remaining"></p>
       <p class="stat__caption">Still to buy</p>
     </div>
-    <div class="stat">
+    <div class="stat stat--ring">
       <p class="stat__label">Wrapped</p>
-      <p class="stat__value"><span data-stat="wrapped"></span><span class="stat__of" data-stat="of"></span></p>
-      <div class="progress" role="progressbar" aria-label="Gifts wrapped" aria-valuemin="0">
-        <span class="progress__fill"></span>
+      <div class="ring" role="progressbar" aria-label="Gifts wrapped" aria-valuemin="0">
+        <svg class="ring__svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <circle class="ring__track" cx="50" cy="50" r="${RING_R}"/>
+          <circle class="ring__fill" cx="50" cy="50" r="${RING_R}"
+                  stroke-dasharray="${RING_C.toFixed(2)}" stroke-dashoffset="${RING_C.toFixed(2)}"/>
+        </svg>
+        <div class="ring__center" aria-hidden="true">
+          <span class="ring__value" data-stat="wrapped"></span>
+          <span class="ring__label">wrapped</span>
+        </div>
       </div>
       <p class="stat__caption" data-stat="pct"></p>
     </div>`;
 }
 
+const RING_R = 44;
+const RING_C = 2 * Math.PI * RING_R;
+
+let lastStats = null;
+
 function renderStats() {
   const s = computeStats(state.items);
   const pct = s.count ? Math.round((s.wrapped / s.count) * 100) : 0;
-  const set = (key, text) => setText(els.stats.querySelector(`[data-stat="${key}"]`), text);
+  const el = (key) => els.stats.querySelector(`[data-stat="${key}"]`);
 
-  set("total", formatMoney(s.total));
-  set("spent", formatMoney(s.spent));
-  set("bought", `${s.bought} of ${s.count} bought`);
-  set("remaining", formatMoney(s.remaining));
-  set("wrapped", String(s.wrapped));
-  set("of", ` / ${s.count}`);
-  set("pct", `${pct}% ready to give`);
+  tween("total", s.total, (v) => setText(el("total"), formatMoney(Math.round(v))));
+  tween("spent", s.spent, (v) => setText(el("spent"), formatMoney(Math.round(v))));
+  tween("remaining", s.remaining, (v) => setText(el("remaining"), formatMoney(Math.round(v))));
+  tween("wrapped", s.wrapped, (v) => setText(el("wrapped"), `${Math.round(v)} / ${s.count}`));
+  tween("ring", s.count ? s.wrapped / s.count : 0, (v) => {
+    els.ringFill.setAttribute("stroke-dashoffset", (RING_C * (1 - v)).toFixed(2));
+  });
+  setText(el("bought"), `${s.bought} of ${s.count} bought`);
+  setText(el("pct"), `${pct}% ready to give`);
 
-  const bar = els.stats.querySelector(".progress");
-  setAttr(bar, "aria-valuemax", String(s.count));
-  setAttr(bar, "aria-valuenow", String(s.wrapped));
-  bar.firstElementChild.style.width = `${pct}%`;
+  const ring = els.stats.querySelector(".ring");
+  setAttr(ring, "aria-valuemax", String(s.count));
+  setAttr(ring, "aria-valuenow", String(s.wrapped));
+  setAttr(ring, "aria-valuetext", `${s.wrapped} of ${s.count} wrapped`);
+
+  // Speak meaningful dashboard changes (not on first paint).
+  if (lastStats && lastStats.spent !== s.spent) announceTotals(`Spent now ${formatMoney(s.spent)}.`);
+  lastStats = s;
+}
+
+// ---- Number tweens (rAF, easeOutCubic) ----
+
+const tweens = new Map(); // key → { value, raf }
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+
+/** Animate a value from where it currently is to `to`, calling `apply(v)` each frame. */
+function tween(key, to, apply) {
+  const t = tweens.get(key) ?? { value: to, raf: 0 };
+  tweens.set(key, t);
+  cancelAnimationFrame(t.raf);
+  const from = t.value;
+  if (from === to || prefersReducedMotion() || !motionReady) {
+    t.value = to;
+    apply(to);
+    return;
+  }
+  const start = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, (now - start) / TWEEN_MS);
+    t.value = from + (to - from) * easeOutCubic(k);
+    apply(t.value);
+    if (k < 1) t.raf = requestAnimationFrame(step);
+    else t.value = to;
+  };
+  t.raf = requestAnimationFrame(step);
 }
 
 // ---- Filters ----
@@ -593,9 +687,11 @@ function createCard(item) {
   el.dataset.id = item.id;
   el.innerHTML = `
     <div class="card__media" data-photo="none">
+      <span class="card__shimmer" aria-hidden="true"></span>
       <img class="card__img" alt="" decoding="async" hidden>
       <span class="card__emoji" aria-hidden="true"></span>
     </div>
+    ${RIBBON_SVG}
     <div class="card__body">
       <div class="card__meta">
         <span class="card__category"></span>
@@ -632,12 +728,34 @@ function createCard(item) {
   return el;
 }
 
+// Satin ribbon + bow across the card's top-right corner (shown when Wrapped).
+const RIBBON_SVG = `
+  <svg class="ribbon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+    <g class="ribbon__band">
+      <path d="M36 0h32l52 52v32z" fill="url(#satin)"/>
+      <path d="M36 0h32l52 52v32z" fill="none" stroke="#C98591" stroke-opacity=".35" stroke-width=".8"/>
+      <path class="ribbon__sheen" d="M36 0h10l74 74v10z" fill="url(#sheen)" opacity=".55"/>
+    </g>
+    <g transform="translate(92 40) rotate(45) scale(1.12)">
+      <g class="ribbon__bow">
+        <path d="M-2 3 L-11 24 L-6 21 L-3 27 L2 5 Z" fill="#D9939F"/>
+        <path d="M2 3 L11 24 L6 21 L3 27 L-2 5 Z" fill="#C98591"/>
+        <path d="M0 0 C-7 -13 -27 -16 -27 -5 C-27 5 -10 6 0 0 Z" fill="url(#satin-bow)" stroke="#B97683" stroke-opacity=".6" stroke-width=".9"/>
+        <path d="M0 0 C7 -13 27 -16 27 -5 C27 5 10 6 0 0 Z" fill="url(#satin-bow)" stroke="#B97683" stroke-opacity=".6" stroke-width=".9"/>
+        <path d="M-6 -6 C-12 -10 -20 -10 -21 -5" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="1.4" stroke-linecap="round"/>
+        <ellipse cx="0" cy="0" rx="5" ry="5.5" fill="#D9939F" stroke="#C98591" stroke-opacity=".5" stroke-width=".8"/>
+      </g>
+    </g>
+  </svg>`;
+
 function updateCard(el, item) {
   const q = (selector) => el.querySelector(selector);
   const label = STATUS_LABELS[item.status];
   const purchased = isPurchased(item);
+  const previousStatus = el.dataset.status;
 
   setAttr(el, "data-status", item.status);
+  el.classList.toggle("is-wrapped", item.status === "wrapped");
   const media = q(".card__media");
   setClass(media, `card__media card__media--${slug(item.category)}`);
   setText(q(".card__emoji"), EMOJI[item.category] ?? "🎁");
@@ -655,6 +773,13 @@ function updateCard(el, item) {
   setClass(pill, `pill pill--${item.status}`);
   setText(pill, label);
   setAttr(pill, "aria-label", `Status: ${label}. Tap to change.`);
+  if (previousStatus && previousStatus !== item.status && motionReady && !prefersReducedMotion()) {
+    // Quick pulse; the colours crossfade via CSS transitions.
+    pill.animate([{ transform: "scale(1)" }, { transform: "scale(1.08)" }, { transform: "scale(1)" }], {
+      duration: DUR_MICRO + 40,
+      easing: "ease-out",
+    });
+  }
   setAttr(q(".card__more"), "aria-label", `More actions for ${item.name}`);
 
   // Paid price (only for ordered / wrapped)
@@ -706,7 +831,7 @@ function renderGrid() {
   const liveIds = new Set(state.items.map((item) => item.id));
   for (const id of cardEls.keys()) if (!liveIds.has(id)) cardEls.delete(id);
 
-  const next = visible.map((item) => {
+  const toEl = (item) => {
     let el = cardEls.get(item.id);
     if (!el) {
       el = createCard(item);
@@ -714,33 +839,30 @@ function renderGrid() {
     }
     updateCard(el, item);
     return el;
-  });
+  };
+  const isShelved = (item) => item.status === "wrapped" && !pendingWrap.has(item.id);
+  const active = visible.filter((item) => !isShelved(item)).map(toEl);
+  const wrapped = visible.filter(isShelved).map(toEl);
 
-  if (next.length === 0) {
+  if (visible.length === 0) {
     if (state.items.length === 0) {
-      next.push(getEmptyEl("list"));
+      active.push(getEmptyEl("list"));
     } else {
       const empty = getEmptyEl("filter");
-      const active = [
+      const filters = [
         state.filter !== "All" ? state.filter : null,
         state.status !== "All" ? STATUS_LABELS[state.status] : null,
       ].filter(Boolean);
-      setText(empty.querySelector(".empty__text"), `Nothing matches ${active.join(" · ")}.`);
-      next.push(empty);
+      setText(empty.querySelector(".empty__text"), `Nothing matches ${filters.join(" · ")}.`);
+      active.push(empty);
     }
   }
 
-  // Only touch the grid's children when membership or order actually changed.
-  const current = [...els.grid.children];
-  const changed = current.length !== next.length || current.some((el, i) => el !== next[i]);
-  if (changed) {
-    const focused = document.activeElement;
-    els.grid.replaceChildren(...next);
-    // Moving a node blurs it; put focus back if the element is still on the page.
-    if (focused && focused !== document.activeElement && focused.isConnected) {
-      focused.focus({ preventScroll: true });
-    }
-  }
+  syncChildren(els.grid, active);
+  syncChildren(els.wrappedGrid, wrapped);
+  setHidden(els.grid, active.length === 0);
+  setHidden(els.wrappedSection, wrapped.length === 0);
+  setText(els.wrappedCount, `${plural(wrapped.length, "gift", "gifts")} ready to give`);
 
   const total = state.items.length;
   setText(
@@ -749,6 +871,96 @@ function renderGrid() {
       ? plural(total, "gift", "gifts")
       : `${visible.length} of ${plural(total, "gift", "gifts")}`
   );
+}
+
+/** Replace a container's children only if membership or order changed; keep focus. */
+function syncChildren(container, next) {
+  const current = [...container.children];
+  if (current.length === next.length && current.every((el, i) => el === next[i])) return;
+  const focused = document.activeElement;
+  container.replaceChildren(...next);
+  // Moving a node blurs it; put focus back if the element is still on the page.
+  if (focused && focused !== document.activeElement && focused.isConnected) {
+    focused.focus({ preventScroll: true });
+  }
+}
+
+// ==========================================================================
+// FLIP: animate cards from their old positions to their new ones
+// ==========================================================================
+
+/** First: remember where every card is on screen right now. */
+function captureCardRects() {
+  if (!motionReady || prefersReducedMotion()) return null;
+  const rects = new Map();
+  for (const el of document.querySelectorAll("#gifts .card")) {
+    rects.set(el, el.getBoundingClientRect());
+  }
+  return rects;
+}
+
+/** Last, Invert, Play: glide moved cards, fade new ones in, ghost removed ones out.
+    Only cards that are (or were) on screen animate; the rest just snap into place. */
+function playFlip(first) {
+  if (!first) return;
+  const now = new Set(document.querySelectorAll("#gifts .card"));
+  const vh = window.innerHeight;
+  const onScreen = (r) => r.width > 0 && r.bottom > -40 && r.top < vh + 40;
+
+  // Leaving: a non-interactive clone fades and shrinks where the card used to be.
+  let leaving = 0;
+  for (const [el, rect] of first) {
+    if (now.has(el) || !onScreen(rect)) continue;
+    leaving++;
+    const ghost = el.cloneNode(true);
+    ghost.classList.add("card--ghost");
+    ghost.removeAttribute("data-id");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.inert = true;
+    Object.assign(ghost.style, {
+      top: `${rect.top + window.scrollY}px`,
+      left: `${rect.left + window.scrollX}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
+    document.body.append(ghost);
+    ghost
+      .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(.96)" }], {
+        duration: DUR_MICRO + 40,
+        easing: "ease-in",
+        fill: "forwards",
+      })
+      .finished.then(() => ghost.remove(), () => ghost.remove());
+  }
+
+  // Measure final positions without any glide still in flight.
+  for (const el of now) el.getAnimations().forEach((a) => a.id === "flip" && a.cancel());
+
+  for (const el of now) {
+    const from = first.get(el);
+    const to = el.getBoundingClientRect();
+    if (!from || from.width === 0) {
+      if (!onScreen(to)) continue;
+      // Entering: fade + scale in, after leavers have started clearing out.
+      el.animate([{ opacity: 0, transform: "scale(.96)" }, { opacity: 1, transform: "none" }], {
+        duration: DUR_LAYOUT - 60,
+        delay: leaving ? 90 : 0,
+        easing: EASE_OUT,
+        fill: "backwards",
+      });
+      continue;
+    }
+    if (!onScreen(from) && !onScreen(to)) continue;
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    const anim = el.animate(
+      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
+      // Long trips (e.g. down to the Wrapped section) get a little more time.
+      { duration: Math.min(DUR_LAYOUT + Math.hypot(dx, dy) / 12, 560), easing: EASE_OUT }
+    );
+    anim.id = "flip";
+  }
 }
 
 // ==========================================================================
@@ -764,31 +976,83 @@ function announce(message) {
   }, 60);
 }
 
+// Dashboard totals get their own (debounced) announcement so they don't
+// trample the status message that triggered them.
+let totalsTimer;
+function announceTotals(message) {
+  clearTimeout(totalsTimer);
+  totalsTimer = setTimeout(() => announce(message), 900);
+}
+
 let bannerDismissed = false;
 function showStorageBanner() {
   if (!bannerDismissed) els.banner.hidden = false;
 }
 
-let toastTimer = null;
+let toastTimer = null; // used when motion is reduced
+let toastClock = null; // the hairline animation doubles as the dismiss timer
 let toastHandler = null;
 
-/** Bottom toast with an optional action button (e.g. Undo). One at a time. */
+/** Bottom toast with an optional action (e.g. Undo). Slides up; a hairline shows time left. */
 function showToast(message, { actionLabel = "", onAction = null, duration = 3500 } = {}) {
   clearTimeout(toastTimer);
+  toastClock?.cancel();
   setText(els.toastMsg, message);
   setText(els.toastAction, actionLabel);
   setHidden(els.toastAction, !actionLabel);
   setHidden(els.toastSep, !actionLabel);
   toastHandler = onAction;
+
+  const wasHidden = els.toast.hidden;
+  els.toast.getAnimations().forEach((a) => a.cancel());
   els.toast.hidden = false;
-  toastTimer = setTimeout(hideToast, duration);
   announce(actionLabel ? `${message}. ${actionLabel} is available.` : message);
+
+  if (prefersReducedMotion()) {
+    toastTimer = setTimeout(hideToast, duration);
+    return;
+  }
+  if (wasHidden) {
+    els.toast.animate([{ opacity: 0, transform: "translateY(16px) scale(.98)" }, { opacity: 1, transform: "none" }], {
+      duration: 280,
+      easing: SPRING,
+    });
+  }
+  toastClock = els.toastBar.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], {
+    duration,
+    easing: "linear",
+    fill: "forwards",
+  });
+  toastClock.finished.then(() => hideToast(), () => {});
 }
 
 function hideToast() {
   clearTimeout(toastTimer);
+  toastClock?.cancel();
+  toastClock = null;
   toastHandler = null;
-  els.toast.hidden = true;
+  if (els.toast.hidden) return;
+  if (prefersReducedMotion()) {
+    els.toast.hidden = true;
+    return;
+  }
+  els.toast
+    .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(12px)" }], {
+      duration: 180,
+      easing: "ease-in",
+      fill: "forwards",
+    })
+    .finished.then(() => {
+      if (!toastHandler && !toastClock) els.toast.hidden = true;
+      els.toast.getAnimations().forEach((a) => a.cancel());
+    }, () => {});
+}
+
+// Hovering or focusing the toast pauses its countdown.
+function pauseToast(paused) {
+  if (!toastClock) return;
+  if (paused) toastClock.pause();
+  else toastClock.play();
 }
 
 // ==========================================================================
@@ -1448,8 +1712,11 @@ function bindEvents() {
   );
   window.addEventListener("resize", () => closeMenu({ restoreFocus: false }));
 
-  // ---- Grid (delegated) ----
-  els.grid.addEventListener("click", (e) => {
+  // iOS only applies :active styles (card press) when a touch listener exists.
+  document.addEventListener("touchstart", () => {}, { passive: true });
+
+  // ---- Cards (delegated on the gifts section: both grids) ----
+  els.gifts.addEventListener("click", (e) => {
     const pill = e.target.closest('[data-action="status"]');
     if (pill) {
       if (suppressClickOn === pill) {
@@ -1473,7 +1740,7 @@ function bindEvents() {
     if (e.target.closest('[data-action="add-first"]')) openSheet("add", null, e.target.closest("button"));
   });
 
-  els.grid.addEventListener("contextmenu", (e) => {
+  els.gifts.addEventListener("contextmenu", (e) => {
     const pill = e.target.closest('[data-action="status"]');
     if (!pill) return;
     e.preventDefault();
@@ -1481,7 +1748,7 @@ function bindEvents() {
     if (menu?.anchor !== pill) openStatusMenu(pill);
   });
 
-  els.grid.addEventListener("pointerdown", (e) => {
+  els.gifts.addEventListener("pointerdown", (e) => {
     const pill = e.target.closest('[data-action="status"]');
     if (!pill || e.button !== 0 || suppressClickOn === pill) return;
     startLongPress(pill, e);
@@ -1493,7 +1760,7 @@ function bindEvents() {
   document.addEventListener("pointercancel", cancelLongPress);
 
   // Paid input: save on blur or Enter, revert on Escape.
-  els.grid.addEventListener("keydown", (e) => {
+  els.gifts.addEventListener("keydown", (e) => {
     const input = e.target.closest('[data-action="paid"]');
     if (!input) return;
     if (e.key === "Enter") {
@@ -1505,7 +1772,7 @@ function bindEvents() {
       input.blur();
     }
   });
-  els.grid.addEventListener("focusout", (e) => {
+  els.gifts.addEventListener("focusout", (e) => {
     if (e.target.matches('[data-action="paid"]')) commitPaid(e.target);
   });
 
@@ -1627,6 +1894,9 @@ function bindEvents() {
   });
 
   // ---- Toast + banner ----
+  for (const [type, paused] of [["pointerenter", true], ["pointerleave", false], ["focusin", true], ["focusout", false]]) {
+    els.toast.addEventListener(type, () => pauseToast(paused));
+  }
   els.toastAction.addEventListener("click", () => {
     const handler = toastHandler;
     hideToast();
@@ -1649,13 +1919,180 @@ function bindEvents() {
 // Init
 // ==========================================================================
 
+let motionReady = false; // false during the first render: no tweens/FLIP on page load
+
 buildStats();
+els.ringFill = els.stats.querySelector(".ring__fill");
 buildFilters();
 buildSheet();
 bindEvents();
-
-els.grid.classList.add("is-entering"); // one-time entrance on first paint only
 render();
-setTimeout(() => els.grid.classList.remove("is-entering"), 1600);
+playEntrance();
+motionReady = true;
 
 if (!store.available) showStorageBanner();
+
+// ==========================================================================
+// Motion: page entrance, wrapped moment, confetti
+// ==========================================================================
+
+/** Header fades up, then dashboard tiles (60ms apart), then cards (40ms apart, last by 600ms). */
+function playEntrance() {
+  document.documentElement.classList.add("is-ready");
+  if (prefersReducedMotion()) return;
+  const rise = [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }];
+  const play = (el, delay, duration = 450) =>
+    el.animate(rise, { duration, delay, easing: EASE_OUT, fill: "backwards" });
+
+  play(els.hero, 0, 520);
+  [...els.stats.children].forEach((tile, i) => play(tile, 120 + i * 60));
+  document.querySelectorAll(".filters, .toolbar").forEach((el) => play(el, 300, 400));
+  [...els.grid.children, ...els.wrappedGrid.children].forEach((card, i) => play(card, Math.min(240 + i * 40, 600)));
+}
+
+/** Ribbon draws across the corner, the bow pops, confetti bursts from the pill. */
+function celebrateWrap(card) {
+  const band = card.querySelector(".ribbon__band");
+  const sheen = card.querySelector(".ribbon__sheen");
+  const bow = card.querySelector(".ribbon__bow");
+  band.animate([{ transform: "scale(0)" }, { transform: "scale(1)" }], { duration: 420, easing: EASE_OUT });
+  sheen.animate(
+    [{ transform: "translate(-40px, -40px)", opacity: 0 }, { opacity: 0.8, offset: 0.4 }, { transform: "translate(30px, 30px)", opacity: 0 }],
+    { duration: 900, delay: 260, easing: "ease-in-out", fill: "backwards" }
+  );
+  bow.animate(
+    [{ transform: "scale(0) rotate(-25deg)", opacity: 0 }, { transform: "scale(1) rotate(0)", opacity: 1 }],
+    { duration: 460, delay: 220, easing: SPRING, fill: "backwards" }
+  );
+  const r = card.querySelector(".pill").getBoundingClientRect();
+  confetti({ x: r.left + r.width / 2, y: r.top + r.height / 2, count: 40 });
+}
+
+/** Every gift wrapped: the banner rises in and a bigger shower falls. */
+function celebrateAll() {
+  if (prefersReducedMotion()) return;
+  setTimeout(() => {
+    els.celebrate.animate(
+      [{ opacity: 0, transform: "translateY(-8px) scale(.98)" }, { opacity: 1, transform: "none" }],
+      { duration: 520, easing: SPRING }
+    );
+    els.celebrate.scrollIntoView({ behavior: "smooth", block: "center" });
+    confetti({ shower: true, count: 140 });
+  }, WRAP_GLIDE_DELAY + 200);
+}
+
+const CONFETTI_COLORS = ["#E8B4BC", "#C98591", "#BFC3C7", "#FFFFFF"];
+let confettiLayer = null; // { canvas, ctx, particles, raf, last }
+
+/**
+ * Hand-rolled confetti on one fixed canvas, removed when the last particle fades.
+ * Burst: from (x, y) upward with gravity. Shower: falls from the top of the screen.
+ */
+function confetti({ x = 0, y = 0, count = 40, shower = false } = {}) {
+  if (prefersReducedMotion()) return;
+  if (!confettiLayer) {
+    const canvas = document.createElement("canvas");
+    canvas.className = "confetti";
+    canvas.setAttribute("aria-hidden", "true");
+    document.body.append(canvas);
+    confettiLayer = { canvas, ctx: canvas.getContext("2d"), particles: [], raf: 0, last: performance.now() };
+    sizeConfetti();
+    confettiLayer.raf = requestAnimationFrame(tickConfetti);
+  }
+  const vw = window.innerWidth;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  for (let i = 0; i < count; i++) {
+    const angle = shower ? rand(80, 100) * (Math.PI / 180) : rand(-150, -30) * (Math.PI / 180);
+    const speed = shower ? rand(0.05, 0.22) : rand(0.28, 0.72); // px/ms
+    confettiLayer.particles.push({
+      x: shower ? rand(0, vw) : x,
+      y: shower ? rand(-80, -10) : y,
+      vx: Math.cos(angle) * speed + (shower ? rand(-0.05, 0.05) : 0),
+      vy: Math.sin(angle) * speed,
+      rot: rand(0, Math.PI * 2),
+      vr: rand(-0.012, 0.012),
+      size: rand(5, 9),
+      shape: ["square", "circle", "star"][i % 3],
+      color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      age: 0,
+      ttl: shower ? rand(2200, 3000) : rand(950, 1300),
+      wobble: rand(0, Math.PI * 2),
+    });
+  }
+}
+
+function sizeConfetti() {
+  const { canvas, ctx } = confettiLayer;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(window.innerWidth * dpr);
+  canvas.height = Math.round(window.innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function tickConfetti(now) {
+  const layer = confettiLayer;
+  const dt = Math.min(32, now - layer.last);
+  layer.last = now;
+  const { ctx, particles } = layer;
+  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+  const GRAVITY = 0.0011; // px/ms²
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.age += dt;
+    if (p.age >= p.ttl) {
+      particles.splice(i, 1);
+      continue;
+    }
+    p.vy += GRAVITY * dt;
+    p.vx *= 0.992;
+    p.vy *= 0.992;
+    p.wobble += dt * 0.008;
+    p.x += (p.vx + Math.sin(p.wobble) * 0.02) * dt;
+    p.y += p.vy * dt;
+    p.rot += p.vr * dt;
+
+    const life = p.age / p.ttl;
+    ctx.globalAlpha = life < 0.7 ? 1 : 1 - (life - 0.7) / 0.3;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.fillStyle = p.color;
+    const s = p.size;
+    if (p.shape === "circle") {
+      ctx.beginPath();
+      ctx.arc(0, 0, s / 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.shape === "square") {
+      ctx.fillRect(-s / 2, -s / 3, s, (s * 2) / 3);
+    } else {
+      // ✦ four-point star
+      ctx.beginPath();
+      for (let k = 0; k < 8; k++) {
+        const r = k % 2 === 0 ? s * 0.75 : s * 0.2;
+        const a = (k * Math.PI) / 4;
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (p.color === "#FFFFFF") {
+      // White pieces need an edge to read on the cream background.
+      ctx.strokeStyle = "rgba(191, 195, 199, .9)";
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+      if (p.shape === "square") ctx.strokeRect(-s / 2, -s / 3, s, (s * 2) / 3);
+    }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+
+  if (particles.length) {
+    layer.raf = requestAnimationFrame(tickConfetti);
+  } else {
+    layer.canvas.remove();
+    confettiLayer = null;
+  }
+}
+
+window.addEventListener("resize", () => confettiLayer && sizeConfetti());

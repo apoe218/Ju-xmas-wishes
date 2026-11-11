@@ -59,8 +59,11 @@
   --max-width: 1200px;
   --gutter: 16px;
 
-  /* Motion */
-  --ease-out: cubic-bezier(.22, .61, .36, 1);
+  /* Motion (see "Motion principles" in CLAUDE.md) */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --spring: cubic-bezier(.22, 1.2, .36, 1);
+  --dur-micro: .2s;
+  --dur-layout: .38s;
 }
 
 @media (min-width: 1024px) {
@@ -124,6 +127,12 @@ a { color: inherit; }
 }
 
 .sparkle { color: var(--blush-deep); }
+
+/* Hide the header until app.js plays its entrance (inline script adds .js-motion;
+   app.js or a 2.5s safety timeout adds .is-ready). */
+@media (prefers-reduced-motion: no-preference) {
+  .js-motion:not(.is-ready) .hero { opacity: 0; }
+}
 
 /* ---------- Page frame (safe-area aware) ---------- */
 
@@ -253,24 +262,71 @@ html.is-locked { overflow: hidden; }
   color: var(--ink-soft);
 }
 
-.progress {
-  height: 4px;
-  margin-top: var(--s-3);
-  border-radius: var(--r-pill);
-  background: var(--silver-tint);
-  overflow: hidden;
+/* Wrapped progress ring */
+.stat--ring {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr;
+  column-gap: var(--s-3);
+  align-items: center;
 }
 
-.progress__fill {
-  display: block;
+.stat--ring .stat__label { grid-column: 1 / -1; }
+
+.stat--ring .stat__caption {
+  margin: 0;
+  padding: 0;
+  align-self: center;
+}
+
+.ring {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  margin-top: var(--s-2);
+}
+
+.ring__svg {
+  width: 100%;
   height: 100%;
-  min-width: 0;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--blush), var(--success));
-  transition: width .5s var(--ease-out);
+  transform: rotate(-90deg);
 }
 
-.progress + .stat__caption { margin-top: 0; }
+.ring__track,
+.ring__fill {
+  fill: none;
+  stroke-width: 7;
+}
+
+.ring__track { stroke: var(--silver-tint); }
+
+.ring__fill {
+  stroke: var(--blush);
+  stroke-linecap: round;
+}
+
+.ring__center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  line-height: 1.1;
+}
+
+.ring__value {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ring__label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
 
 @media (min-width: 768px) {
   .stats { margin-bottom: var(--s-7); }
@@ -280,6 +336,7 @@ html.is-locked { overflow: hidden; }
   }
   .stat { padding: var(--s-5); }
   .stat__value { font-size: 28px; }
+  .ring { width: 84px; height: 84px; }
 }
 
 @media (min-width: 1024px) {
@@ -489,17 +546,6 @@ html.is-locked { overflow: hidden; }
   transition: transform .35s var(--ease-out), box-shadow .35s var(--ease-out);
 }
 
-/* One-time entrance on first load only (re-renders don't replay it) */
-.grid.is-entering .card {
-  animation: rise .6s var(--ease-out) both;
-}
-.grid.is-entering .card:nth-child(2)  { animation-delay: 45ms; }
-.grid.is-entering .card:nth-child(3)  { animation-delay: 90ms; }
-.grid.is-entering .card:nth-child(4)  { animation-delay: 135ms; }
-.grid.is-entering .card:nth-child(5)  { animation-delay: 180ms; }
-.grid.is-entering .card:nth-child(6)  { animation-delay: 225ms; }
-.grid.is-entering .card:nth-child(n+7) { animation-delay: 270ms; }
-
 @media (hover: hover) {
   .card:hover {
     transform: translateY(-3px);
@@ -508,9 +554,56 @@ html.is-locked { overflow: hidden; }
   .card:hover .card__emoji { transform: scale(1.06) rotate(-3deg); }
 }
 
-@keyframes rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: none; }
+/* Phones: press to compress slightly, shadow deepening */
+@media (hover: none) {
+  .card:active {
+    transform: scale(.98);
+    box-shadow: var(--shadow-lg);
+    transition-duration: .15s;
+  }
+}
+
+.card { position: relative; }
+
+/* Clone used to fade out a card that is leaving the grid (see playFlip) */
+.card--ghost {
+  position: absolute;
+  z-index: 5;
+  margin: 0;
+  pointer-events: none;
+}
+
+/* Wrapped cards: slightly muted, ribbon on */
+.card.is-wrapped { background: #FDFBF8; }
+.card.is-wrapped .card__media { filter: saturate(.8); }
+.card.is-wrapped .card__media::before { opacity: .85; }
+
+.ribbon {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  width: 36%;
+  max-width: 140px;
+  height: auto;
+  aspect-ratio: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+  filter: drop-shadow(0 2px 3px rgba(201, 133, 145, .35));
+}
+
+.card.is-wrapped .ribbon { opacity: 1; }
+
+.ribbon__band {
+  transform-box: fill-box;
+  transform-origin: 0 0;
+}
+
+.ribbon__bow {
+  transform-box: fill-box;
+  transform-origin: center;
+  filter: drop-shadow(0 1.5px 1.5px rgba(150, 80, 95, .35));
 }
 
 /* Placeholder image area: pastel wash + frosted plate + emoji */
@@ -566,6 +659,30 @@ html.is-locked { overflow: hidden; }
 }
 
 .card__media[data-photo="loaded"] .card__img { opacity: 1; }
+
+/* Soft shimmer while a photo loads */
+.card__shimmer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: none;
+  overflow: hidden;
+}
+
+.card__media[data-photo="loading"] .card__shimmer { display: block; }
+
+.card__shimmer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .55) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: shimmer 1.4s var(--ease-out) infinite;
+}
+
+@keyframes shimmer {
+  to { transform: translateX(100%); }
+}
 .card__media[data-photo="error"] .card__img { display: none; }
 
 .card__emoji {
@@ -912,6 +1029,26 @@ html.is-locked { overflow: hidden; }
 
 .btn--outline:active { background: #F3DDE1; }
 
+/* Press-down feedback */
+.btn,
+.chip,
+.pill,
+.icon-btn,
+.card__more,
+.toast__action,
+.banner__close {
+  transition-property: background-color, border-color, color, box-shadow, transform;
+}
+
+.btn:active:not(:disabled),
+.chip:active,
+.icon-btn:active,
+.card__more:active,
+.toast__action:active,
+.banner__close:active { transform: scale(.96); transition-duration: .1s; }
+
+.pill:active { transform: scale(.94); transition-duration: .1s; }
+
 /* ---------- Empty state ---------- */
 
 .empty {
@@ -1158,11 +1295,13 @@ html.is-locked { overflow: hidden; }
 .toast {
   position: fixed;
   z-index: 60;
-  left: 50%;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   /* Sits above the + button on phones */
   bottom: calc(max(var(--s-4), calc(env(safe-area-inset-bottom) + var(--s-3))) + 68px);
-  transform: translateX(-50%);
   display: flex;
+  overflow: hidden;
   align-items: center;
   gap: var(--s-2);
   width: max-content;
@@ -1182,6 +1321,19 @@ html.is-locked { overflow: hidden; }
 .toast:has(.toast__action[hidden]) { padding-right: 18px; }
 
 .toast__sep { opacity: .4; }
+
+/* Time-left hairline (scaled by app.js) */
+.toast__bar {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 0;
+  height: 2px;
+  background: var(--blush);
+  opacity: .7;
+  border-radius: 2px;
+  transform-origin: left;
+}
 
 .toast__action {
   flex: none;
@@ -1557,6 +1709,80 @@ html.is-locked { overflow: hidden; }
 }
 
 .photo__url .btn { flex: none; height: 40px; }
+
+/* ---------- Wrapped section ---------- */
+
+.wrapped { margin-top: var(--s-7); }
+
+.wrapped__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: var(--s-4);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.wrapped__title {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -.01em;
+}
+
+.wrapped__count {
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* ---------- "Every gift is wrapped" banner ---------- */
+
+.celebrate {
+  margin-bottom: var(--s-5);
+  padding: var(--s-5);
+  text-align: center;
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgba(255, 255, 255, .7), transparent 60%),
+    linear-gradient(135deg, var(--blush-tint), #FBEFF1 50%, var(--silver-tint));
+  border: 1px solid #F1D9DD;
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+}
+
+.celebrate__title {
+  font-family: var(--font-serif);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.01em;
+}
+
+.celebrate__text {
+  margin-top: var(--s-1);
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+/* ---------- Confetti overlay ---------- */
+
+.confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.svg-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
 
 /* ---------- Footer ---------- */
 

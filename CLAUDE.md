@@ -47,6 +47,16 @@ with a dashboard of budget vs. spent.
 - Category emoji: Tech 📱, Travel 🧳, Bags 👜, Shoes 👟, Beauty 💄,
   Accessories 🕶️, Clothing 🧥, Home 🏠.
 
+## Motion principles
+- Durations: 150–250ms for micro-interactions, 300–450ms for layout changes.
+- Easing: cubic-bezier(.2,.8,.2,1) for entrances, a gentle spring feel for sheets.
+- Animate only transform and opacity for performance.
+- Everything non-essential is disabled under prefers-reduced-motion: reduce.
+- In code: EASE_OUT / SPRING / DUR_MICRO / DUR_LAYOUT / TWEEN_MS in app.js,
+  --ease-out / --spring / --dur-micro / --dur-layout in style.css. JS checks
+  prefersReducedMotion() before every animation; CSS has a global
+  reduced-motion override.
+
 ## Progress log
 (Update at the end of every step: what was built, decisions made, known issues.)
 
@@ -256,3 +266,73 @@ with a dashboard of budget vs. spent.
   - Export uses an <a download> blob. In an iOS home-screen web app this can
     open a preview rather than save a file (revisit with the Web Share API
     in Step 6).
+
+### Step 4: motion and animation
+- Built:
+  - Page entrance: header fades up, then tiles stagger 60ms, then cards stagger
+    40ms (capped so the last starts by 600ms), each rising 12px.
+  - Dashboard numbers tween over 600ms with easeOutCubic. The Wrapped tile is
+    now an SVG progress ring ("X / 14 wrapped").
+  - FLIP for filter/sort/add/delete/undo.
+  - Status pill pulse.
+  - The wrapped moment: confetti burst + satin ribbon and bow, then the card
+    glides into a new "Wrapped 🎁" section.
+  - "Every gift is wrapped ✦" banner + confetti shower.
+  - Card hover lift / press compress; press-down on buttons; toast slides up
+    with a time-left hairline; photo shimmer.
+- Decisions:
+  - One FLIP pipeline: render() measures every card first, updates everything,
+    then playFlip(). Cards that left get an inert, aria-hidden clone (a
+    "ghost") that fades + scales to .96 where the card was. The real element
+    stays cached, so a quick filter toggle can't fight a running exit.
+    Entering cards fade/scale in. Only cards on screen (±40px) animate;
+    off-screen ones snap. That keeps the commit cheap on long lists.
+  - No animation on first render (motionReady=false): the entrance owns page
+    load. An inline head script hides only the header until app.js adds
+    .is-ready; a 2.5s fallback means content can't stay hidden if JS fails.
+  - Wrapped section: wrapped cards render into #wrapped-grid after the main
+    grid. A card that just became Wrapped stays in place for 900ms
+    (pendingWrap) for the ribbon + confetti, then a normal render
+    FLIP-glides it down. Card event delegation moved to the #gifts section so
+    it covers both grids. With the status filter on "Wrapped", the main grid
+    hides and only the section shows.
+  - Ring progress animates stroke-dashoffset through the same rAF tween as the
+    numbers. That's a deliberate exception to "transform/opacity only": the
+    ring is one tiny SVG.
+  - Confetti: one fixed <canvas> (DPR ≤ 2), created on demand and removed
+    when the last particle fades. Squares, circles and ✦ stars in blush,
+    blush-deep, silver and white (white gets a silver edge so it reads on
+    cream), with gravity, drag, wobble and rotation. Burst = 40 particles,
+    ~1.2s; shower = 140 particles, ~2.5s.
+  - Ribbon: inline SVG per card with shared gradients (#satin, #satin-bow,
+    #sheen) defined once in index.html. Static on wrapped cards; on the
+    moment the band scales in from the corner, a sheen sweeps across and the
+    bow springs in. Wrapped cards are muted (cream background, desaturated
+    image).
+  - Toast: the hairline's WAAPI animation is the dismiss timer, so hovering
+    or focusing the toast pauses it. Centred with margin:auto so transforms
+    stay free for the slide.
+  - Sheet: spring open (cubic-bezier(.22,1.2,.36,1)); drag follows the finger
+    and closes on velocity (from Step 3).
+  - Reduced motion: no entrance, tweens, FLIP, ghosts, confetti, ribbon draw,
+    toast/sheet animation or shimmer movement. Wrapped cards move to their
+    section immediately with a static ribbon.
+- Tested:
+  - Motion suite (48 checks): entrance delays, tween mid-values, ring, pill
+    pulse keyframes, FLIP ghosts/glides/entrances, the full wrapped moment
+    (canvas appears and is removed, card holds then moves), all-wrapped
+    banner + shower, toast hairline + hover pause, shimmer with a delayed
+    image, mobile press, sheet spring, and the reduced-motion behaviour.
+  - Steps 2–3 suites still pass (81 + 78), now run with reduced motion so
+    assertions don't race the tweens.
+  - Chrome CPU throttling 4x, iPhone 13 emulation, median of 3 trials:
+    animations hold 60fps (p95 frame 16.8ms) for filter, unfilter, sort, the
+    wrapped moment and the sheet. The only long frames are the render
+    commits when you tap: 0–2 frames of 50–100ms throttled (~12–25ms on a
+    real phone). Culling FLIP to on-screen cards cut the filter commit from
+    133ms to ≤50ms throttled.
+- Known issues:
+  - Sort/filter commits still re-insert every card (replaceChildren), so very
+    long lists would cost more per tap.
+  - The ring animates stroke-dashoffset (paint, not composite) — fine at
+    this size.

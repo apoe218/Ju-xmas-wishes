@@ -13,6 +13,11 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
 
   <link rel="stylesheet" href="./style.css">
+  <!-- Hide the header until app.js plays the entrance (never longer than 2.5s) -->
+  <script>
+    document.documentElement.classList.add("js-motion");
+    setTimeout(function () { document.documentElement.classList.add("is-ready"); }, 2500);
+  </script>
   <script type="module" src="./app.js"></script>
 </head>
 <body>
@@ -42,12 +47,17 @@
     </header>
 
     <main>
+      <div class="celebrate" id="celebrate" role="status" hidden>
+        <p class="celebrate__title">Every gift is wrapped <span class="sparkle" aria-hidden="true">✦</span></p>
+        <p class="celebrate__text">All of Juliana's gifts are ready for Christmas morning.</p>
+      </div>
+
       <section class="stats" aria-labelledby="stats-heading">
         <h2 class="visually-hidden" id="stats-heading">Budget overview</h2>
         <div class="stats__grid" id="stats"></div>
       </section>
 
-      <section aria-labelledby="gifts-heading">
+      <section id="gifts" aria-labelledby="gifts-heading">
         <h2 class="visually-hidden" id="gifts-heading">Gifts</h2>
 
         <div class="filters">
@@ -72,6 +82,14 @@
         </div>
 
         <div class="grid" id="grid"></div>
+
+        <section class="wrapped" id="wrapped-section" aria-labelledby="wrapped-heading" hidden>
+          <header class="wrapped__header">
+            <h2 class="wrapped__title" id="wrapped-heading">Wrapped <span aria-hidden="true">🎁</span></h2>
+            <p class="wrapped__count" id="wrapped-count"></p>
+          </header>
+          <div class="grid grid--wrapped" id="wrapped-grid"></div>
+        </section>
       </section>
     </main>
 
@@ -216,7 +234,31 @@
     <span class="toast__msg" id="toast-msg"></span>
     <span class="toast__sep" id="toast-sep" aria-hidden="true">·</span>
     <button type="button" class="toast__action" id="toast-action"></button>
+    <span class="toast__bar" id="toast-bar" aria-hidden="true"></span>
   </div>
+
+  <!-- Shared satin gradients for the ribbon on wrapped cards -->
+  <svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="satin" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#F3CDD3"/>
+        <stop offset=".42" stop-color="#E8B4BC"/>
+        <stop offset=".5" stop-color="#F8E2E6"/>
+        <stop offset=".58" stop-color="#E3A9B2"/>
+        <stop offset="1" stop-color="#C98591"/>
+      </linearGradient>
+      <linearGradient id="satin-bow" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#F5D3D8"/>
+        <stop offset=".55" stop-color="#E8B4BC"/>
+        <stop offset="1" stop-color="#C98591"/>
+      </linearGradient>
+      <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+        <stop offset=".5" stop-color="#fff" stop-opacity=".75"/>
+        <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+  </svg>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden>
 
