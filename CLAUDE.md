@@ -61,3 +61,36 @@ with a dashboard of budget vs. spent.
   repo itself. Check Settings → Pages and make sure it points at the branch
   the app ends up on, folder "/ (root)". Work is currently on branch
   `claude/dreamy-ritchie-81dbso`.
+
+### Step 1: static layout
+- Built: index.html, style.css, app.js. Renders from data.js: header (eyebrow,
+  serif title with ✦, dynamic gift count), 4-tile dashboard (Total budget,
+  Spent, Remaining, Wrapped with progress bar), category filter chips (visual
+  only), card grid, footer. Only the Shop links are interactive.
+- Layout: page max width 1200px, gutters 16px (<1024px) / 32px (≥1024px),
+  all with env(safe-area-inset-*) fallbacks. Stats 2×2 under 768px, 4 across
+  at 768px+. Grid 1 col <640px, 2 cols 640–1023px, 3 cols 1024px+.
+- Decisions:
+  - Spent = sum of (paid ?? price) for ordered + wrapped items; currency via
+    Intl.NumberFormat en-US with no cents.
+  - Placeholder image: per-category pastel gradient (.card__media--<category>)
+    with a frosted circular "plate" and faint ring behind the emoji. The emoji
+    scales with card width using container query units (fallback 72px).
+  - Stat tiles share one row height (grid-auto-rows: 1fr) so captions align.
+  - In 2- and 3-column grids, card names reserve two lines so prices and notes
+    line up across a row; single-column mobile doesn't reserve the space.
+  - Filter chips scroll edge to edge on mobile with a mask-image fade and no
+    scrollbar; at 1024px+ they wrap and center, with no fade.
+  - Active chip is ink-filled. Wrapped progress bar fills blush → success.
+  - Subtle motion only: staggered card rise on load, hover lift on cards,
+    nudge on the Shop arrow. All of it is disabled under prefers-reduced-motion.
+  - All text from data goes through escapeHtml; links only allow http(s), and
+    every link opens with target=_blank rel="noopener noreferrer".
+  - No localStorage yet (nothing to persist in this step).
+- Known issues:
+  - Contrast: --blush-deep (#C98591) on white is ~2.9:1, below WCAG AA (4.5:1)
+    for the Shop button text and the Wrapped pill. It's kept as specified in
+    the design system; consider a darker accent-text token later.
+  - Filter chips are <button>s with aria-pressed but do nothing yet.
+  - The edge fade on the chip row is always on below 1024px, even when the
+    row is scrolled to its end.
