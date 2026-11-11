@@ -660,3 +660,14 @@ with a dashboard of budget vs. spent.
   - Commit and push.
   - Wait 1–2 minutes for Pages.
   - Open the site: installed copies show "Update available · Refresh".
+  - Check it's really live: the deployed sw.js should show the new
+    CACHE_VERSION (https://apoe218.github.io/Ju-xmas-wishes/sw.js).
+- If a Pages publish fails or gets stuck (Actions tab → "pages build and
+  deployment"):
+  - "Startup failure" or stuck in "queued": check githubstatus.com first.
+    These came from a GitHub Actions/Pages outage on 2026-11-11, not from
+    the app.
+  - After GitHub recovers, a failed run can be re-run. A run stranded in
+    "queued" can't be cancelled or re-run (the API refuses both), so start a
+    fresh publish instead: push any commit, or in Settings → Pages set the
+    branch to None → Save, then back to this branch, "/ (root)" → Save.
